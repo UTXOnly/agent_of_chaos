@@ -40,7 +40,7 @@ x-plain-env: &plain-env
 
 services:
   datadog-agent:
-    image: datadog/agent-dev:log-tag-filtering-9e35a50b-full
+    image: ${DD_AGENT_IMAGE:-datadog/agent-dev:log-tag-filtering-9e35a50b-full}
     container_name: dd-agent-tag-filter
     restart: unless-stopped
     pid: host
