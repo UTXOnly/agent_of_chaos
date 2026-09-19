@@ -1,8 +1,14 @@
 # Tag-filter fleet: 15 log generators (8 plain-text, 7 JSON) tailed by a single
-# datadog/agent-dev:log-tag-filtering build with DD_LOGS_CONFIG_TAG_FILTERS set.
+# datadog/agent-dev:log-tag-filtering build.
+#
+# This file alone is the BASELINE (no DD_LOGS_CONFIG_TAG_FILTERS). Stack the
+# overlay to get the COMPARISON with tag filters applied:
 #
 #   cp .env.example .env   # set DD_API_KEY (and DD_SITE if not datadoghq.com)
+#   # baseline
 #   docker compose -f docker-compose.tag-filter.yml up --build -d
+#   # with tag filters
+#   docker compose -f docker-compose.tag-filter.yml -f docker-compose.tag-filter.filters.yml up --build -d
 #   docker compose -f docker-compose.tag-filter.yml logs -f datadog-agent
 #   docker compose -f docker-compose.tag-filter.yml down
 #
@@ -10,7 +16,7 @@
 # agent tails those files (see datadog/conf.d/agent_of_chaos.d/conf.yaml), so
 # each log carries filename:/dirname: tags. Docker stdout collection is on as
 # well, so the generators' stats lines arrive with container_*/docker_image/
-# short_image tags. All of those are in the exclude list below.
+# short_image tags. All of those are in the overlay's exclude list.
 
 name: aoc-tag-filter
 
@@ -46,6 +52,8 @@ services:
       DD_ENV: tagfilter-lab
       # Host-level tags that the filter is expected to strip from every log.
       DD_TAGS: >-
+        experiment:log-tag-filter
+        variant:${AOC_VARIANT:-local}
         project:agent-of-chaos
         region:local
         availability-zone:local-a
@@ -60,17 +68,6 @@ services:
       DD_LOGS_CONFIG_OPEN_FILES_LIMIT: "500"
       DD_LOG_LEVEL: ${DD_LOG_LEVEL:-info}
       DD_INTERNAL_PROFILING_ENABLED: "true"
-      DD_LOGS_CONFIG_TAG_FILTERS: >-
-        {"exclude":[
-          "env:*","availability-zone:*","aws_account:*","cloud_provider:*",
-          "container_id:*","container_name:*","datadog.api_key_uuid:*",
-          "datadog.index:*","datadog.submission_auth:*","dirname:*",
-          "docker_image:*","filename:*","git.commit.sha:*",
-          "git.repository_url:*","iam_profile:*","image_id:*","image_name:*",
-          "image:*","instance-type:*","kernel:*","name:*","project:*",
-          "region:*","security-group:*","service:*","short_image:*",
-          "source:*","vcpu:*","version:*"
-        ]}
     volumes:
       - ./logs/tag-filter:/var/log/agent-of-chaos:ro
       - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro

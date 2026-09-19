@@ -155,23 +155,31 @@ Configure a file log collection rule for `/var/log/agent-of-chaos/*.log` in the 
 ## Tag-filter fleet (agent-dev build)
 
 `docker-compose.tag-filter.yml` stands up 15 generators (8 plain-text, 7 JSON) behind a
-single `datadog/agent-dev:log-tag-filtering-9e35a50b-full` container that has
-`DD_LOGS_CONFIG_TAG_FILTERS` set to strip host/container/file tags. Each generator writes
-to `./logs/tag-filter/<name>/`; the Agent tails those files via
+single `datadog/agent-dev:log-tag-filtering-9e35a50b-full` container. The base file alone is
+the **baseline** (no tag filters); stacking `docker-compose.tag-filter.filters.yml` on top adds
+`DD_LOGS_CONFIG_TAG_FILTERS` for the **comparison** run. Everything else is identical.
+
+Each generator writes to `./logs/tag-filter/<name>/`; the Agent tails those files via
 `datadog/conf.d/agent_of_chaos.d/conf.yaml` (adding `dirname:`/`filename:` tags) and also
 collects container stdout (adding `container_*`/`docker_image`/`short_image` tags), so every
-tag in the exclude list actually shows up on the way in.
+tag in the exclude list actually shows up on the way in. Set `AOC_VARIANT` in `.env` to tag
+everything with `variant:baseline` / `variant:comparison`.
 
 ```bash
-cp .env.example .env          # set DD_API_KEY (and DD_SITE if needed)
+cp .env.example .env          # set DD_API_KEY, AOC_VARIANT (and DD_SITE if needed)
+# baseline
 docker compose -f docker-compose.tag-filter.yml up --build -d
-docker compose -f docker-compose.tag-filter.yml logs -f datadog-agent
+# comparison (tag filters on)
+docker compose -f docker-compose.tag-filter.yml -f docker-compose.tag-filter.filters.yml up --build -d
 docker compose -f docker-compose.tag-filter.yml exec datadog-agent agent status
 docker compose -f docker-compose.tag-filter.yml down
 ```
 
 Per-generator load is tuned with `AOCH_FLEET_*` variables in `.env` (mode, services,
 lines per cycle, cycle sleep, rotation size/count).
+
+On Linux hosts the bind-mounted log dir must be writable by uid 10001 before the first
+start: `mkdir -p logs/tag-filter && sudo chown -R 10001:10001 logs`.
 
 ## Output
 
