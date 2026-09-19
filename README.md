@@ -152,6 +152,27 @@ services:
 
 Configure a file log collection rule for `/var/log/agent-of-chaos/*.log` in the Agent.
 
+## Tag-filter fleet (agent-dev build)
+
+`docker-compose.tag-filter.yml` stands up 15 generators (8 plain-text, 7 JSON) behind a
+single `datadog/agent-dev:log-tag-filtering-9e35a50b-full` container that has
+`DD_LOGS_CONFIG_TAG_FILTERS` set to strip host/container/file tags. Each generator writes
+to `./logs/tag-filter/<name>/`; the Agent tails those files via
+`datadog/conf.d/agent_of_chaos.d/conf.yaml` (adding `dirname:`/`filename:` tags) and also
+collects container stdout (adding `container_*`/`docker_image`/`short_image` tags), so every
+tag in the exclude list actually shows up on the way in.
+
+```bash
+cp .env.example .env          # set DD_API_KEY (and DD_SITE if needed)
+docker compose -f docker-compose.tag-filter.yml up --build -d
+docker compose -f docker-compose.tag-filter.yml logs -f datadog-agent
+docker compose -f docker-compose.tag-filter.yml exec datadog-agent agent status
+docker compose -f docker-compose.tag-filter.yml down
+```
+
+Per-generator load is tuned with `AOCH_FLEET_*` variables in `.env` (mode, services,
+lines per cycle, cycle sleep, rotation size/count).
+
 ## Output
 
 Each service worker writes:
