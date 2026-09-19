@@ -15,7 +15,7 @@
 # Every generator writes to its own subdir of ./logs/tag-filter/<name>/ and the
 # agent tails those files (see datadog/conf.d/agent_of_chaos.d/conf.yaml), so
 # each log carries filename:/dirname: tags. Logs come from files only
-# plus container stdout via the docker socket (container_collect_all on).
+# plus container stdout tailed from /var/lib/docker/containers (container_collect_all on).
 
 name: aoc-tag-filter
 
@@ -73,6 +73,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      # The json-file driver keeps the actual log files here. Without this mount the
+      # agent streams container logs through the docker socket instead of tailing files.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Tailing offsets, so an agent restart neither re-sends nor skips lines.
+      - /opt/datadog-agent/run:/opt/datadog-agent/run:rw
+      # Process collection resolves uids to usernames through the host's passwd file.
+      - /etc/passwd:/etc/passwd:ro
     depends_on:
       - plain-01
       - json-01
