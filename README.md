@@ -160,10 +160,10 @@ the **baseline** (no tag filters); stacking `docker-compose.tag-filter.filters.y
 `DD_LOGS_CONFIG_TAG_FILTERS` for the **comparison** run. Everything else is identical.
 
 Each generator writes to `./logs/tag-filter/<name>/`; the Agent tails those files via
-`datadog/conf.d/agent_of_chaos.d/conf.yaml` (adding `dirname:`/`filename:` tags) and also
-collects container stdout (adding `container_*`/`docker_image`/`short_image` tags), so every
-tag in the exclude list actually shows up on the way in. Set `AOC_VARIANT` in `.env` to tag
-everything with `variant:baseline` / `variant:comparison`.
+`datadog/conf.d/agent_of_chaos.d/conf.yaml`, adding `dirname:`/`filename:` tags. Logs are
+collected from files only (`container_collect_all` off); the docker socket is mounted for
+container metrics. Set `AOC_VARIANT` in
+`.env` to tag everything with `variant:baseline` / `variant:comparison`.
 
 ```bash
 cp .env.example .env          # set DD_API_KEY, AOC_VARIANT (and DD_SITE if needed)

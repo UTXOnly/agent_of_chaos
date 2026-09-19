@@ -14,9 +14,8 @@
 #
 # Every generator writes to its own subdir of ./logs/tag-filter/<name>/ and the
 # agent tails those files (see datadog/conf.d/agent_of_chaos.d/conf.yaml), so
-# each log carries filename:/dirname: tags. Docker stdout collection is on as
-# well, so the generators' stats lines arrive with container_*/docker_image/
-# short_image tags. All of those are in the overlay's exclude list.
+# each log carries filename:/dirname: tags. Logs come from files only
+# (container_collect_all is off); the docker socket is mounted for metrics.
 
 name: aoc-tag-filter
 
@@ -63,8 +62,7 @@ services:
         vcpu:8
         version:fleet-1
       DD_LOGS_ENABLED: "true"
-      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "true"
-      DD_CONTAINER_EXCLUDE_LOGS: "name:dd-agent-tag-filter"
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
       DD_LOGS_CONFIG_OPEN_FILES_LIMIT: "500"
       DD_LOG_LEVEL: ${DD_LOG_LEVEL:-info}
       DD_INTERNAL_PROFILING_ENABLED: "true"
