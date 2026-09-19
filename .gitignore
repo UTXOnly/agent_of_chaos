@@ -1,0 +1,23 @@
+# Runtime logs
+logs/*
+!logs/.gitkeep
+bytecheck_run/
+*.log
+*.log.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Local secrets / compose overrides
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

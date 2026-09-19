@@ -1,0 +1,17 @@
+services:
+  agent-of-chaos:
+    build: .
+    image: agent-of-chaos:latest
+    container_name: agent-of-chaos
+    restart: unless-stopped
+    environment:
+      AOCH_MODE: ${AOCH_MODE:-steady}
+      AOCH_SERVICES: ${AOCH_SERVICES:-10}
+      AOCH_LINES_PER_CYCLE: ${AOCH_LINES_PER_CYCLE:-20}
+      AOCH_LOG_DIR: /var/log/agent-of-chaos
+      AOCH_BENCHMARK_CONFIG: ${AOCH_BENCHMARK_CONFIG:-}
+      AOCH_BENCHMARK: ${AOCH_BENCHMARK:-}
+    volumes:
+      - ./logs:/var/log/agent-of-chaos
+    # CLI flags still work and override env defaults when passed:
+    # command: ["--mode", "chaos", "--services", "8"]
