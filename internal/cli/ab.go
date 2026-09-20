@@ -7,10 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -37,6 +41,7 @@ type ABConfig struct {
 	Drain     gen.Duration      `yaml:"drain"`
 	Runs      int               `yaml:"runs"`
 	Pause     gen.Duration      `yaml:"pause"`
+	Parallel  *bool             `yaml:"parallel"` // both sides at once (default), or one after the other
 	A         Variant           `yaml:"a"`
 	B         Variant           `yaml:"b"`
 	Env       map[string]string `yaml:"env"`
@@ -267,7 +272,8 @@ func runAB(args []string) int {
 	config := fs.Str("config", "aoc.yaml", "the test to run (a copy is kept with the results)")
 	name := fs.Str("name", "", "experiment name (overrides the config's `name`)")
 	duration := fs.Duration("duration", 0, "override the measured window for both sides")
-	runs := fs.Int("runs", 0, "override `runs`: rounds per side, alternating a, b, a, b, …")
+	runs := fs.Int("runs", 0, "override `runs`: rounds per side")
+	sequential := fs.Bool("sequential", false, "run the sides one after the other instead of alongside each other (the config's `parallel: false`)")
 	threshold := fs.Float("threshold", 0, "override `threshold`: percent change on a headline metric that counts as a finding")
 	only := fs.Str("only", "", "run only this side (a, b, or a side's name); the other side's existing results are reused")
 	plan := fs.Bool("plan", false, "print the resolved plan and exit without running anything")
@@ -298,6 +304,10 @@ func runAB(args []string) int {
 	if cfg.Notebook != nil && !flagGiven(fs, "notebook") {
 		*mkNotebook = *cfg.Notebook
 	}
+	parallel := cfg.Parallel == nil || *cfg.Parallel
+	if *sequential {
+		parallel = false
+	}
 	p, profileSrc, err := cfg.workload()
 	if err != nil {
 		return fail("ab: %v", err)
@@ -327,7 +337,11 @@ func runAB(args []string) int {
 	}
 	root := filepath.Join(cfg.Results, experiment)
 
-	fmt.Fprintf(os.Stderr, "\naoc ab  %s  profile=%s  window=%s  warmup=%s  drain=%s  rounds=%d\n", experiment, cfg.Profile, p.Duration, p.Warmup, p.Drain, cfg.Runs)
+	order := "sides alongside each other"
+	if !parallel {
+		order = "sides one after the other"
+	}
+	fmt.Fprintf(os.Stderr, "\naoc ab  %s  profile=%s  window=%s  warmup=%s  drain=%s  rounds=%d  %s\n", experiment, cfg.Profile, p.Duration, p.Warmup, p.Drain, cfg.Runs, order)
 	if p.Description != "" {
 		fmt.Fprintf(os.Stderr, "  %s\n", p.Description)
 	}
@@ -361,30 +375,101 @@ func runAB(args []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 	logf := newLogf()
-	for i, r := range todo {
-		fmt.Fprintf(os.Stderr, "── run %d/%d: %s (%s) ──\n", i+1, len(todo), r.variant.Name, r.variant.Image)
-		spec := runSpec{
+	spec := func(r abRun, noBuild bool) runSpec {
+		return runSpec{
 			profile: p, profileSrc: profileSrc, name: r.name,
 			agent:      agentSpec{Image: r.variant.Image, Pull: r.variant.Pull, Env: r.variant.Env},
 			resultsDir: r.dir,
 			composeCmd: *composeCmd, composeFile: *composeFile, intake: *intake,
-			noBuild: *noBuild || i > 0,
+			noBuild: noBuild,
 			tags:    []string{"experiment:" + experiment, "variant:" + sanitize(r.variant.Name)},
 			logf:    logf,
 		}
-		rep, err := executeRun(ctx, spec)
-		if errors.Is(err, errInterrupted) {
-			fmt.Fprintln(os.Stderr, "\naoc: interrupted")
-			return 130
-		}
-		if err != nil {
-			return fail("ab: run %s: %v", r.name, err)
-		}
+	}
+	summary := func(r abRun, rep *report.Report) {
 		fmt.Fprintf(os.Stderr, "\n  %s: agent %s · delivered %s · lost %s · dup %s · e2e p99 %s · container cpu %.0f%%\n\n",
 			r.variant.Name, report.AgentLabel(rep), pct(rep.Delivery.Unique, rep.Delivery.GeneratedRecords), fmtInt(rep.Delivery.Missing), fmtInt(rep.Delivery.Duplicates), secs(rep.Latency.EndToEnd.P99), rep.Resources.ContainerCPUAvg)
-		if i < len(todo)-1 && cfg.Pause > 0 {
-			logf("pausing %s before the next run", cfg.Pause)
-			if !sleepCtx(ctx, cfg.Pause.D()) {
+	}
+	pause := func(more bool) bool {
+		if more && cfg.Pause > 0 {
+			logf("pausing %s before the next round", cfg.Pause)
+			return sleepCtx(ctx, cfg.Pause.D())
+		}
+		return true
+	}
+	if parallel {
+		// Both sides of a round at once, each in its own compose project
+		// (aoc-a, aoc-b: separate containers, volumes and host ports) so
+		// they share the host but nothing else; the aoc image is built once
+		// before any of them starts.
+		if len(todo) > 0 && !*noBuild {
+			build := &compose{cmd: strings.Fields(*composeCmd), files: []string{*composeFile}, dir: ".", log: logf}
+			if err := build.run(ctx, "build", "intake"); err != nil {
+				if ctx.Err() != nil {
+					fmt.Fprintln(os.Stderr, "\naoc: interrupted")
+					return 130
+				}
+				return fail("ab: build: %v", err)
+			}
+		}
+		rounds := byRound(todo)
+		for ri, round := range rounds {
+			var names []string
+			for _, r := range round {
+				names = append(names, fmt.Sprintf("%s (%s)", r.variant.Name, r.variant.Image))
+			}
+			fmt.Fprintf(os.Stderr, "── round %d/%d: %s ──\n", ri+1, len(rounds), strings.Join(names, "  ‖  "))
+			type outcome struct {
+				r   abRun
+				rep *report.Report
+				err error
+			}
+			results := make([]outcome, len(round))
+			var wg sync.WaitGroup
+			for i, r := range round {
+				sp := spec(r, true)
+				sp.stack = "aoc-" + r.side
+				sp.intakePort, sp.tcpPort = intakeBasePort+sideIndex(r.side), tcpBasePort+sideIndex(r.side)
+				sp.intake = withPort(*intake, sp.intakePort)
+				sp.logf = newLogfPrefix(r.variant.Name)
+				wg.Add(1)
+				go func(i int, r abRun, sp runSpec) {
+					defer wg.Done()
+					rep, err := executeRun(ctx, sp)
+					results[i] = outcome{r, rep, err}
+				}(i, r, sp)
+			}
+			wg.Wait()
+			for _, o := range results {
+				if errors.Is(o.err, errInterrupted) {
+					fmt.Fprintln(os.Stderr, "\naoc: interrupted")
+					return 130
+				}
+				if o.err != nil {
+					return fail("ab: run %s: %v", o.r.name, o.err)
+				}
+			}
+			for _, o := range results {
+				summary(o.r, o.rep)
+			}
+			if !pause(ri < len(rounds)-1) {
+				fmt.Fprintln(os.Stderr, "\naoc: interrupted")
+				return 130
+			}
+		}
+	} else {
+		for i, r := range todo {
+			fmt.Fprintf(os.Stderr, "── run %d/%d: %s (%s) ──\n", i+1, len(todo), r.variant.Name, r.variant.Image)
+			rep, err := executeRun(ctx, spec(r, *noBuild || i > 0))
+			if errors.Is(err, errInterrupted) {
+				fmt.Fprintln(os.Stderr, "\naoc: interrupted")
+				return 130
+			}
+			if err != nil {
+				return fail("ab: run %s: %v", r.name, err)
+			}
+			summary(r, rep)
+			if !pause(i < len(todo)-1) {
 				fmt.Fprintln(os.Stderr, "\naoc: interrupted")
 				return 130
 			}
@@ -677,6 +762,46 @@ func envSummary(env map[string]string) string {
 		parts = append(parts, k+"="+v)
 	}
 	return "  env: " + strings.Join(parts, " ")
+}
+
+// Host ports of the parallel stacks: side a on the compose defaults, side
+// b one above.
+const (
+	intakeBasePort = 8282
+	tcpBasePort    = 10516
+)
+
+func sideIndex(side string) int {
+	if side == "b" {
+		return 1
+	}
+	return 0
+}
+
+// withPort is the intake URL with its port replaced.
+func withPort(intake string, port int) string {
+	u, err := url.Parse(intake)
+	if err != nil {
+		return intake
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(port))
+	return u.String()
+}
+
+// byRound groups the planned runs by round, in plan order.
+func byRound(runs []abRun) [][]abRun {
+	var out [][]abRun
+	idx := map[int]int{}
+	for _, r := range runs {
+		i, ok := idx[r.round]
+		if !ok {
+			i = len(out)
+			idx[r.round] = i
+			out = append(out, nil)
+		}
+		out[i] = append(out[i], r)
+	}
+	return out
 }
 
 func containsRun(runs []abRun, r abRun) bool {

@@ -21,15 +21,18 @@ b:
 Validate without running: `./bin/aoc ab --plan`. Fix errors it reports
 (unknown keys, missing `b.image`, same side names).
 
-Pick `runs: 2` (or `--runs 2`) when the result will decide something:
-rounds alternate a, b, a, b and the brief uses medians.
+Pick `runs: 2` (or `--runs 2`) when the result will decide something: the
+brief uses medians. Both sides of a round run at the same time by default
+(`parallel: true`), each in its own compose project; `--sequential` runs
+them one after the other.
 
 ## 2. Run
 
-Expected wall time: `2 × runs × (warmup + duration + drain + ~2 min)`.
-Start it in the background, output to a file, and wait for the process to
-exit — do not poll every minute, and do not run anything else against
-Docker meanwhile (the run owns the compose stack).
+Expected wall time: `runs × (warmup + duration + drain + ~2 min)` (twice
+that with `--sequential`). Start it in the background, output to a file,
+and wait for the process to exit — do not poll every minute, and do not run
+anything else against Docker meanwhile (the run owns the `aoc-a` and
+`aoc-b` compose projects, or `aoc` sequentially).
 
 ```bash
 mkdir -p results && ./bin/aoc ab > results/ab.log 2>&1

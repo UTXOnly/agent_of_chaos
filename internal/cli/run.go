@@ -200,18 +200,22 @@ func sortedStringKeys(m map[string]string) []string {
 	return ks
 }
 
-// compose wraps `docker compose -f … ` invocations.
+// compose wraps `docker compose [-p project] -f … ` invocations.
 type compose struct {
-	cmd   []string
-	files []string
-	env   []string
-	dir   string
-	log   func(string, ...any)
+	cmd     []string
+	project string // -p; "" keeps the compose file's own name
+	files   []string
+	env     []string
+	dir     string
+	log     func(string, ...any)
 }
 
 func (c *compose) args(extra ...string) []string {
 	var a []string
 	a = append(a, c.cmd[1:]...)
+	if c.project != "" {
+		a = append(a, "-p", c.project)
+	}
 	for _, f := range c.files {
 		a = append(a, "-f", f)
 	}
@@ -308,6 +312,20 @@ type runSpec struct {
 	noBuild     bool
 	tags        []string // extra tags on the intake's aoc.* metrics and the agent's DD_TAGS
 	logf        func(string, ...any)
+	// stack names this run's compose project and its containers
+	// (<stack>-intake, <stack>-agent, <stack>-gen-*); with ports, it lets
+	// several runs share a host. Empty: the compose file's own name, aoc.
+	stack      string
+	intakePort int // host port for the intake's HTTP (0: the compose default)
+	tcpPort    int // host port for the intake's TCP (0: the compose default)
+}
+
+// stackName is the prefix of this run's container names.
+func (s runSpec) stackName() string {
+	if s.stack == "" {
+		return "aoc"
+	}
+	return s.stack
 }
 
 var errInterrupted = errors.New("interrupted")
@@ -334,9 +352,15 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		os.WriteFile(filepath.Join(s.resultsDir, "profile.yaml"), s.profileSrc, 0o644)
 	}
 
-	c := &compose{cmd: strings.Fields(s.composeCmd), files: append([]string{s.composeFile}, p.Compose...), dir: ".", log: logf}
+	c := &compose{cmd: strings.Fields(s.composeCmd), project: s.stack, files: append([]string{s.composeFile}, p.Compose...), dir: ".", log: logf}
 	c.files = append(c.files, overridePath)
-	c.env = []string{"AOC_RUN_NAME=" + name}
+	c.env = []string{"AOC_RUN_NAME=" + name, "AOC_STACK=" + s.stackName()}
+	if s.intakePort > 0 {
+		c.env = append(c.env, fmt.Sprintf("AOC_INTAKE_PORT=%d", s.intakePort))
+	}
+	if s.tcpPort > 0 {
+		c.env = append(c.env, fmt.Sprintf("AOC_TCP_PORT=%d", s.tcpPort))
+	}
 	if s.agent.Image != "" {
 		c.env = append(c.env, "DD_AGENT_IMAGE="+s.agent.Image)
 	}
@@ -377,7 +401,7 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		}
 		return nil, err
 	}
-	imageID, digest := imageIdentity(ctx, "aoc-agent", s.agent.Image)
+	imageID, digest := imageIdentity(ctx, s.stackName()+"-agent", s.agent.Image)
 	if digest != "" {
 		logf("agent image %s = %s", s.agent.Image, digest)
 	}
@@ -559,8 +583,17 @@ func imageIdentity(ctx context.Context, container, image string) (id, digest str
 }
 
 func newLogf() func(string, ...any) {
+	return newLogfPrefix("")
+}
+
+// newLogfPrefix is newLogf with a tag after the time, for runs that log
+// alongside each other.
+func newLogfPrefix(prefix string) func(string, ...any) {
+	if prefix != "" {
+		prefix = "[" + prefix + "]  "
+	}
 	return func(format string, a ...any) {
-		fmt.Fprintf(os.Stderr, "  %s  %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, a...))
+		fmt.Fprintf(os.Stderr, "  %s  %s%s\n", time.Now().Format("15:04:05"), prefix, fmt.Sprintf(format, a...))
 	}
 }
 

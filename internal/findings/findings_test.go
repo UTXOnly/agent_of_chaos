@@ -270,3 +270,28 @@ func TestCodeSection(t *testing.T) {
 		t.Errorf("no-source: %+v %s", r, res.CodeNote)
 	}
 }
+
+func TestFlameFuncAndCompareURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"github.com/DataDog/datadog-agent/comp/logs-library/tagfilter.(*Scoped).Keep": "(*Scoped).Keep",
+		"gopkg.in/yaml.v3.(*parser).document":                                         "(*parser).document",
+		"runtime.mallocgc":                                                            "mallocgc",
+		"encoding/json.(*encodeState).marshal.func1":                                  "(*encodeState).marshal.func1",
+	} {
+		if got := FlameFunc(in); got != want {
+			t.Errorf("FlameFunc(%q) = %q, want %q", in, got, want)
+		}
+	}
+	a := &report.Report{Name: "x-a", WindowStart: time.Unix(1000, 0), WindowEnd: time.Unix(1600, 0)}
+	b := &report.Report{Name: "x-b", WindowStart: time.Unix(2000, 0), WindowEnd: time.Unix(2600, 0)}
+	u := CompareURL(a, b, "https://x.datadoghq.com", time.Minute, "cpu-time", "(*Scoped).Keep")
+	for _, want := range []string{
+		"https://x.datadoghq.com/profiling/comparison?query=service%3Adatadog-agent+run%3Ax-b&start=1940000&end=2660000",
+		"&compare_query_A=service%3Adatadog-agent+run%3Ax-a&compare_start_A=940000&compare_end_A=1660000",
+		"&profile_type=cpu-time&viz=flame_graph&paused=true&profiling-flame-graph__filter=focus_on%28function%3A%22%28%2AScoped%29.Keep%22%29",
+	} {
+		if !strings.Contains(u, want) {
+			t.Errorf("CompareURL missing %q in\n%s", want, u)
+		}
+	}
+}

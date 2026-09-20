@@ -1,8 +1,9 @@
 # aoc.yaml — the A/B test this checkout runs.
 #
-# Two Datadog Agents get the same workload, one after the other, against the
-# same fake logs intake: side `a` is the control (the latest public release
-# by default), side `b` the candidate (a development build). The harness then
+# Two Datadog Agents get the same workload, alongside each other (each in
+# its own stack, against its own fake logs intake): side `a` is the control
+# (the latest public release by default), side `b` the candidate (a
+# development build). The harness then
 # writes an investigation brief, results/<name>/findings.md: which headline
 # metrics regressed, and the evidence that says why — memory by process and
 # by cgroup, the agent's own CPU/heap profiles diffed function by function,
@@ -72,15 +73,25 @@ duration: 10m
 # threshold: 10
 
 ## @param runs - integer - optional - default: 1
-## Rounds per side. Rounds alternate — a, b, a, b, … — so whatever drifts on
-## the host over the session affects both sides equally. With more than one
-## round, tables and the verdict use the median of each side's runs, and the
-## notebook overlays every run.
+## Rounds per side. With more than one round, tables and the verdict use the
+## median of each side's runs, and the notebook overlays every run.
 #
 # runs: 1
 
+## @param parallel - boolean - optional - default: true
+## Run both sides of a round at the same time, each in its own compose
+## project (aoc-a, aoc-b: separate containers, volumes and host ports
+## 8282/10516 and 8283/10517), so a round takes one window instead of two
+## and both agents see the same moment of the host. They do share the
+## host's CPU and disk, so keep the workload well inside what the machine
+## can do twice over. `false` (or `aoc ab --sequential`) runs them one
+## after the other — a, b, a, b, … — in the single `aoc` project.
+#
+# parallel: true
+
 ## @param pause - duration - optional - default: 10s
-## Idle time between two runs, for the host to settle.
+## Idle time between two rounds (or, sequentially, two runs), for the host
+## to settle.
 #
 # pause: 10s
 
@@ -170,8 +181,10 @@ b:
 
 ## @param notebook - boolean - optional - default: true when DD_APP_KEY is set
 ## Create the A/B notebook in Datadog: the brief first (verdict, one cell per
-## regression with its evidence, the profile diffs and links), then the
-## charts with both agents overlaid, the full table last. notebook.json is
+## regression with its evidence, the profile diffs and links), the
+## profiler's comparison view embedded — a's flame graph beside b's for CPU,
+## heap and allocations, then one per mover focused on that function — and
+## the charts with both agents overlaid, the full table last. notebook.json is
 ## always written and can be handed to the Datadog MCP's
 ## create_datadog_notebook instead.
 #

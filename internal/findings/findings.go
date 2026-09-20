@@ -1221,7 +1221,9 @@ func ProfilesMarkdown(res *Result, in Input) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Flame graphs (each run's tag and window; pick CPU, heap live size or allocations there, or ⇄ Compare one against the other):\n\n")
+	fmt.Fprintf(&b, "Side by side (A = %s, B = %s; the profiler's comparison view, focused on a mover where one is named):\n\n", in.Cols[0].Name, in.Cols[1].Name)
+	b.WriteString(CompareLinks(res, in.Cols, in.AppURL, in.Margin))
+	b.WriteString("\nEach run on its own (pick CPU, heap live size or allocations there):\n\n")
 	b.WriteString(ProfileLinks(in.Cols, in.AppURL, in.Margin))
 	return b.String()
 }
@@ -1315,6 +1317,98 @@ func ProfileLinks(cols []report.Column, appURL string, margin time.Duration) str
 		}
 	}
 	return b.String()
+}
+
+// profileTypes maps a profile view's label to the profiler's profile type.
+var profileTypes = map[string]string{"CPU": "cpu-time", "heap in use": "heap-live-size", "allocation rate": "alloc-size"}
+
+// ProfileType is the profiler's profile type for a view label ("" when the
+// profiler has no matching view).
+func ProfileType(label string) string { return profileTypes[label] }
+
+// CompareURL is the profiler's comparison view — b's flame graph on the
+// right, a's on the left, each scoped to its run's tag and window — for
+// one profile type, optionally focused on one function (the profiler's
+// `function` field, i.e. `(*T).Method` without the package).
+func CompareURL(a, b *report.Report, appURL string, margin time.Duration, profileType, focus string) string {
+	af, at := a.WindowStart.Add(-margin).UnixMilli(), a.WindowEnd.Add(margin).UnixMilli()
+	bf, bt := b.WindowStart.Add(-margin).UnixMilli(), b.WindowEnd.Add(margin).UnixMilli()
+	u := fmt.Sprintf("%s/profiling/comparison?query=%s&start=%d&end=%d&compare_query_A=%s&compare_start_A=%d&compare_end_A=%d&compareValuesMode=absolute&profile_type=%s&viz=flame_graph&paused=true",
+		appURL, url.QueryEscape("service:datadog-agent run:"+b.Name), bf, bt, url.QueryEscape("service:datadog-agent run:"+a.Name), af, at, profileType)
+	if focus != "" {
+		u += "&profiling-flame-graph__filter=" + url.QueryEscape(fmt.Sprintf("focus_on(function:%q)", focus))
+	}
+	return u
+}
+
+// FlameFunc is the name the profiler's flame-graph filter matches on: the
+// symbol without its package path, e.g. `(*Scoped).Keep` for
+// `github.com/DataDog/datadog-agent/comp/logs-library/tagfilter.(*Scoped).Keep`.
+func FlameFunc(name string) string {
+	s := prof.ShortFunc(name)
+	if i := strings.Index(s, ".("); i >= 0 {
+		return s[i+1:]
+	}
+	if i := strings.Index(s, "."); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
+// CompareLinks renders the comparison view for CPU, live heap and
+// allocations, then one focused on each of the located movers.
+func CompareLinks(res *Result, cols []report.Column, appURL string, margin time.Duration) string {
+	if len(cols) < 2 || len(cols[0].Runs) == 0 || len(cols[1].Runs) == 0 {
+		return ""
+	}
+	a, b := cols[0].Runs[0], cols[1].Runs[0]
+	var out strings.Builder
+	fmt.Fprintf(&out, "- whole agent: [CPU](%s) · [heap live size](%s) · [allocations](%s)\n",
+		CompareURL(a, b, appURL, margin, "cpu-time", ""), CompareURL(a, b, appURL, margin, "heap-live-size", ""), CompareURL(a, b, appURL, margin, "alloc-size", ""))
+	for _, m := range Movers(res) {
+		fmt.Fprintf(&out, "- `%s` (%s, %s): [compare](%s)\n", m.Function, m.View, m.Delta, CompareURL(a, b, appURL, margin, m.ProfileType, m.Focus))
+	}
+	return out.String()
+}
+
+// Mover is a profile mover the comparison view can be focused on.
+type Mover struct {
+	Function    string // as reported (short)
+	View        string
+	Delta       string
+	ProfileType string
+	Focus       string // FlameFunc(Function)
+}
+
+// Movers are the functions worth a focused comparison: the located code
+// rows first, else the largest increase of every view the profiler has,
+// at most four, one per function.
+func Movers(res *Result) []Mover {
+	var out []Mover
+	seen := map[string]bool{}
+	add := func(fn, view, delta string) {
+		pt := ProfileType(view)
+		f := FlameFunc(fn)
+		if pt == "" || f == "" || seen[f] || len(out) >= 4 {
+			return
+		}
+		seen[f] = true
+		out = append(out, Mover{Function: prof.ShortFunc(fn), View: view, Delta: delta, ProfileType: pt, Focus: f})
+	}
+	for _, r := range res.Code {
+		add(r.Function, r.View, r.Delta)
+	}
+	if len(out) == 0 {
+		for _, d := range res.Profiles {
+			for _, r := range d.Rows {
+				if r.Delta > 0 {
+					add(r.Function, d.Label, prof.FormatDelta(r.Delta, d.Unit))
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // ProfileURL is the profiling explorer's flame graph of one profile type

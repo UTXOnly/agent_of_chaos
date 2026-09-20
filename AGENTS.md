@@ -11,9 +11,11 @@ the working copy. Read this file, then the skill for the task at hand.
 1. **Configure** `aoc.yaml` (the control is `datadog/agent:7` = latest
    release; `b.image` is the build under test; `b.env` its feature flags).
    `./bin/aoc ab --plan` validates it.
-2. **Run** `./bin/aoc ab` (skill: `ab-test`). A 10-minute window per side
-   is the default; the run takes ~2 × (warmup + duration + drain + 2 min).
-   Run it in the background with output to a file and wait — do not poll.
+2. **Run** `./bin/aoc ab` (skill: `ab-test`). A 10-minute window is the
+   default and both sides run at once, each in its own compose project, so
+   a run takes ~(warmup + duration + drain + 2 min) per round (`parallel:
+   false` / `--sequential` doubles it). Run it in the background with
+   output to a file and wait — do not poll.
 3. **Read** `results/<name>/findings.md` (skill: `investigate`). It is the
    whole brief: what we tested, what differed (only rows that moved),
    where (per regressed topic: a one-sentence reading, the tables that
@@ -70,7 +72,10 @@ created with the MCP's `create_datadog_notebook`.
   — kept under `<side>/profiles/` for the local diff and forwarded to
   Datadog unchanged. Only the core agent is profiled by default. The
   profiler's tags carry each build's commit; the brief uses them for the
-  code section and the agent checkout.
+  code section and the agent checkout. The notebook embeds the profiler's
+  comparison view (`findings.CompareURL`: a beside b, one cell per profile
+  type, then one per mover focused on that function) — extend that, never
+  hand-build profiler URLs elsewhere.
 - `threshold` (aoc.yaml, default 10 %) decides what is a finding. Lost,
   duplicated or reordered records always are.
 - Keep experiments small (laptop or a t4g instance); the workload is the
