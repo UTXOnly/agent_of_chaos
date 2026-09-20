@@ -7,6 +7,14 @@ and lifecycle events to `/api/v1/events`. Everything carries `run:<name>`
 `--dd-tags` adds (the compose files add `harness:aoc`; the fleet adds
 `experiment:log-tag-filter,variant:<AOC_VARIANT>`).
 
+`aoc ab` adds `experiment:<name>` and `variant:<side>` to every run of a
+test — on the intake's `aoc.*` metrics and events, and (through `DD_TAGS`
+and `DD_INTERNAL_PROFILING_EXTRA_TAGS`) on the agent's own metrics and
+profiles — with `run:<name>-<side>[-<round>]` per run. So
+`avg:aoc.agent.process.cpu_percent{experiment:my-feature} by {variant}` is
+the two agents on one chart, and the profiler can be filtered to
+`service:datadog-agent experiment:my-feature variant:b`.
+
 Rates (`*_per_sec`, `*.rate`) are averages over the submission interval.
 Ledger values are cumulative since the last window reset.
 
@@ -71,7 +79,9 @@ MCP's `explore_profiling_flame_graph` (`service:datadog-agent run:<name>`,
 `aoc: intake started`, `aoc: generator <gen> started|finished`,
 `aoc: measurement window opened`, `aoc: faults set|clear`, and whatever
 `POST /harness/mark?text=…` posts (`aoc run` marks window closed, generators
-stopped, drain finished). Query them with `source:aoc run:<name>`.
+stopped, drain finished). Query them with `source:aoc run:<name>`. A finished
+A/B test posts `aoc: A/B <name> finished — a vs b` with the headline table
+as Markdown (`experiment:<name>`).
 
 ## Notebooks
 
@@ -82,6 +92,16 @@ memory; agent bytes sent; destination responses by status; pipeline
 utilization; retries/network errors; tags per log; faults; per generator;
 dig-deeper links. With several `--results`, the comparison table comes first
 and each run's key cells are pinned to that run's window.
+
+`aoc ab` builds an *A/B* notebook instead: the header with each side's
+image, digest and version and the comparison table (medians over rounds),
+a real-time timeline of the session (`{experiment:<name>} by {variant}`),
+then every chart with all runs overlaid — the cells are pinned to the latest
+run's window and each earlier run's queries are wrapped in
+`timeshift(…, -<seconds between the runs>)` so the same second of the
+measured window lines up; grouped queries get `run` added to their group-by
+so the legend still tells the sides apart. The last cell links each run's
+events and profiles.
 
 Creating the notebook needs `DD_APP_KEY`; `notebook.json` is always written
 and can be fed to the Datadog MCP's `create_datadog_notebook`.

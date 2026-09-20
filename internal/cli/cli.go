@@ -62,7 +62,7 @@ Usage:
 
 Commands:
 `)
-	order := []string{"generate", "intake", "run", "report", "compare", "notebook", "ship", "scenarios", "profiles", "version"}
+	order := []string{"ab", "run", "generate", "intake", "report", "compare", "notebook", "ship", "scenarios", "profiles", "version"}
 	byName := map[string]command{}
 	for _, c := range commands {
 		byName[c.name] = c
@@ -78,9 +78,9 @@ Every flag can also be set with an environment variable: AOC_<FLAG> with
 dashes as underscores (--log-dir → AOC_LOG_DIR). Flags win over env.
 
 Quick start (Docker; DD_API_KEY in .env so metrics land in Datadog):
-  docker compose up -d --build         # intake + agent + generators
-  aoc report --intake http://localhost:8282 --out results/baseline
-  aoc notebook --results results/baseline          # → Datadog notebook (needs DD_APP_KEY)
+  aoc ab                               # A/B the latest release vs the dev image in aoc.yaml
+  aoc run --profile profiles/baseline.yaml --name baseline   # one measured run
+  aoc notebook --results results/baseline                    # → Datadog notebook (needs DD_APP_KEY)
 `)
 }
 

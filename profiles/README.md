@@ -36,3 +36,7 @@ aoc run --profile profiles/baseline.yaml --agent-image datadog/agent:7 --name ba
 aoc run --profile profiles/baseline.yaml --agent-image datadog/agent-dev:my-build --name candidate
 aoc compare results/baseline results/candidate
 ```
+
+Or point `aoc.yaml` at it (`profile: profiles/baseline.yaml`) and let `aoc ab`
+run it against two agent images back to back; the profile can also be
+written inline in `aoc.yaml`.

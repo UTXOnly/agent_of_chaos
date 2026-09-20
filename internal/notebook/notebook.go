@@ -38,6 +38,9 @@ type Options struct {
 	// profiler queries when the report does not carry them.
 	AgentContainer string
 	AgentHost      string
+	// Experiment is the experiment:<name> tag shared by the runs of an A/B
+	// test (ForAB); it drives the real-time timeline cell.
+	Experiment string
 }
 
 func (o *Options) defaults() {
@@ -266,6 +269,144 @@ func ForCompare(reports []*report.Report, o Options) *Notebook {
 	}
 	nb.Cells = append(nb.Cells, markdown(digDeeper(reports[0], &o)))
 	return nb
+}
+
+// ForAB builds the notebook of an A/B test: the comparison table, then
+// every chart with all runs overlaid. The runs happened one after the other,
+// so each earlier run is time-shifted onto the window of the latest one (the
+// anchor) and the cells are pinned to that window.
+func ForAB(title string, cols []report.Column, o Options) *Notebook {
+	o.defaults()
+	if o.Name != "" {
+		title = o.Name
+	}
+	type overlay struct {
+		label string
+		r     *report.Report
+	}
+	var runs []overlay
+	for _, c := range cols {
+		for i, r := range c.Runs {
+			label := c.Name
+			if len(c.Runs) > 1 {
+				label = fmt.Sprintf("%s #%d", c.Name, i+1)
+			}
+			runs = append(runs, overlay{label, r})
+		}
+	}
+	if len(runs) == 0 {
+		return &Notebook{Name: truncate(title, 80), Type: "report"}
+	}
+	anchor, first := runs[0].r, runs[0].r
+	var longest time.Duration
+	for _, x := range runs {
+		if x.r.WindowStart.After(anchor.WindowStart) {
+			anchor = x.r
+		}
+		if x.r.WindowStart.Before(first.WindowStart) {
+			first = x.r
+		}
+		if d := x.r.WindowEnd.Sub(x.r.WindowStart); d > longest {
+			longest = d
+		}
+	}
+	start, end := anchor.WindowStart.Add(-o.Margin), anchor.WindowStart.Add(longest).Add(o.Margin)
+	nb := &Notebook{Name: truncate(title, 80), Type: "report", Start: start, End: end}
+
+	var head strings.Builder
+	for _, c := range cols {
+		r := c.Runs[0]
+		fmt.Fprintf(&head, "- **%s** — agent %s", c.Name, report.AgentLabel(r))
+		if r.Agent.Digest != "" {
+			fmt.Fprintf(&head, ", digest `%s`", r.Agent.Digest)
+		}
+		var windows []string
+		for _, x := range c.Runs {
+			windows = append(windows, fmt.Sprintf("`run:%s` %s → %s UTC", x.Name, x.WindowStart.UTC().Format("15:04:05"), x.WindowEnd.UTC().Format("15:04:05")))
+		}
+		fmt.Fprintf(&head, "; %s\n", strings.Join(windows, ", "))
+	}
+	fmt.Fprintf(&head, "\nEvery chart below overlays the runs on one time axis: `%s` is drawn at its real time and each earlier run is shifted forward onto it with `timeshift`, so the same second of the measured window lines up. Tables show medians when a side ran more than once.\n\n", anchor.Name)
+	head.WriteString(strings.TrimPrefix(report.CompareColumns(cols), "# aoc compare\n\n"))
+	nb.Cells = append(nb.Cells, markdown(head.String()))
+
+	if o.Experiment != "" {
+		// The whole session in real time: one line per variant.
+		sc := "experiment:" + o.Experiment
+		span := timeseries("Timeline: the runs as they happened (records/s by variant)",
+			[]query{{q: fmt.Sprintf("sum:%s.intake.logs_per_sec{%s} by {variant}", o.Prefix, sc)}, {q: fmt.Sprintf("sum:%s.gen.records_per_sec{%s} by {variant}", o.Prefix, sc)}},
+			first.WindowStart.Add(-o.Margin), latestEnd(cols).Add(o.Margin), "records/s")
+		nb.Cells = append(nb.Cells, span)
+	}
+
+	for _, c := range runCharts {
+		var qs []query
+		for _, x := range runs {
+			delta := anchor.WindowStart.Sub(x.r.WindowStart).Round(time.Second)
+			for _, q := range c.build(scopeFor(x.r), o.Prefix, container(x.r, &o)) {
+				qs = append(qs, shifted(q, x.label, delta))
+			}
+		}
+		nb.Cells = append(nb.Cells, timeseries(c.title, qs, start, end, c.unit))
+	}
+	nb.Cells = append(nb.Cells, markdown(digDeeperAB(cols, &o)))
+	return nb
+}
+
+// latestEnd is the latest window end across all columns.
+func latestEnd(cols []report.Column) time.Time {
+	var end time.Time
+	for _, c := range cols {
+		for _, x := range c.Runs {
+			if x.WindowEnd.After(end) {
+				end = x.WindowEnd
+			}
+		}
+	}
+	return end
+}
+
+// shifted moves a run's query forward by delta onto the anchor window and
+// labels it. Grouped queries get `run` added to the group-by instead of an
+// alias, so the legend still tells the runs apart.
+func shifted(q query, label string, delta time.Duration) query {
+	out := q
+	if strings.Contains(out.q, " by {") {
+		out.q = strings.Replace(out.q, " by {", " by {run,", 1)
+		out.alias = ""
+	} else if out.alias != "" {
+		out.alias = label + ": " + out.alias
+	} else {
+		out.alias = label
+	}
+	if delta > 0 {
+		out.q = fmt.Sprintf("timeshift(%s, -%d)", out.q, int64(delta.Seconds()))
+	}
+	return out
+}
+
+func digDeeperAB(cols []report.Column, o *Options) string {
+	app := o.AppURL
+	var b strings.Builder
+	fmt.Fprintf(&b, "### Dig deeper\n\n")
+	if o.Experiment != "" {
+		fmt.Fprintf(&b, "Every run of this test carries `experiment:%s` and `variant:<side>` on its `%s.*` metrics, events and on the agent's own metrics and profiles, so `… {experiment:%s} by {variant}` puts the sides on one chart at their real times. Per run:\n\n", o.Experiment, o.Prefix, o.Experiment)
+	}
+	for _, c := range cols {
+		for _, r := range c.Runs {
+			from, to := r.WindowStart.Add(-o.Margin).UnixMilli(), r.WindowEnd.Add(o.Margin).UnixMilli()
+			evQ := url.QueryEscape("source:aoc run:" + r.Name)
+			profQ := url.QueryEscape("service:datadog-agent run:" + r.Name)
+			fmt.Fprintf(&b, "- **%s** `run:%s` (%s): [events](%s/event/explorer?query=%s&from_ts=%d&to_ts=%d) · [agent profiles](%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true)\n",
+				c.Name, r.Name, report.AgentLabel(r), app, evQ, from, to, app, profQ, from, to)
+		}
+	}
+	if len(cols) > 1 && len(cols[0].Runs) > 0 && len(cols[1].Runs) > 0 {
+		a, bb := cols[0].Runs[0].Name, cols[1].Runs[0].Name
+		fmt.Fprintf(&b, "\nAsk the Datadog MCP: \"compare `%s.agent.process.cpu_percent` and `%s.intake.latency.e2e.p99` between `run:%s` and `run:%s`\", or \"show the CPU flame graph for `service:datadog-agent run:%s` filtered to `logs` frames, then the same for `run:%s`\".\n", o.Prefix, o.Prefix, a, bb, a, bb)
+	}
+	fmt.Fprintf(&b, "\n`compare.md`, each run's `report.md` / `report.json` / `timeseries.csv`, and the `aoc.yaml` that ran are in the results directory of the test.\n")
+	return b.String()
 }
 
 func digDeeper(r *report.Report, o *Options) string {

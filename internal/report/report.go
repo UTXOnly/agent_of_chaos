@@ -41,6 +41,8 @@ type Agent struct {
 	Encodings map[string]int64 `json:"encodings"`  // Content-Encoding → requests
 	Paths     map[string]int64 `json:"paths"`      // logs endpoint → requests
 	Image     string           `json:"image,omitempty"`
+	ImageID   string           `json:"image_id,omitempty"`  // docker image ID the container ran (aoc run)
+	Digest    string           `json:"digest,omitempty"`    // registry digest, repo@sha256:… (aoc run, pulled images)
 	Container string           `json:"container,omitempty"` // docker container name observed for CPU/memory
 	Hostname  string           `json:"hostname,omitempty"`  // most common hostname in received logs
 }

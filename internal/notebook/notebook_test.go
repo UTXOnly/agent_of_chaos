@@ -57,3 +57,45 @@ func TestForCompare(t *testing.T) {
 		t.Errorf("per-cell absolute time missing")
 	}
 }
+
+func TestForAB(t *testing.T) {
+	a := sample("exp-a") // 22:13:20 → 22:16:20
+	b := sample("exp-b")
+	b.WindowStart, b.WindowEnd = a.WindowStart.Add(5*time.Minute), a.WindowEnd.Add(5*time.Minute)
+	cols := []report.Column{{Name: "release", Runs: []*report.Report{a}}, {Name: "candidate", Runs: []*report.Report{b}}}
+	nb := ForAB("aoc A/B exp", cols, Options{Experiment: "exp", AppURL: "https://x.datadoghq.com"})
+	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+1+len(runCharts)+1 {
+		t.Fatalf("name=%q cells=%d", nb.Name, len(nb.Cells))
+	}
+	// The window is the later run's, ±60 s.
+	if !nb.Start.Equal(b.WindowStart.Add(-time.Minute)) || !nb.End.Equal(b.WindowEnd.Add(time.Minute)) {
+		t.Errorf("window %s → %s", nb.Start, nb.End)
+	}
+	s := string(nb.Body())
+	for _, want := range []string{
+		`"query": "timeshift(sum:aoc.gen.records_per_sec{run:exp-a}, -300)"`, // a shifted onto b
+		`"alias": "release: generated"`,
+		`"query": "sum:aoc.gen.records_per_sec{run:exp-b}"`, // the anchor is not shifted
+		`"alias": "candidate: generated"`,
+		`timeshift(sum:aoc.intake.responses_per_sec{run:exp-a} by {run,status}, -300)`, // grouped: run joins the group-by
+		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,                     // the real-time timeline
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+	if strings.Contains(s, "| runs (values are medians)") {
+		t.Error("single-run columns should not print the runs row")
+	}
+	if !strings.Contains(s, "source%3Aaoc+run%3Aexp-b") || !strings.Contains(s, "service%3Adatadog-agent+run%3Aexp-a") {
+		t.Error("dig-deeper links missing")
+	}
+	// The title is the notebook's name; the first cell must not repeat it.
+	if strings.Contains(s, "# aoc A/B exp") {
+		t.Error("first cell repeats the title")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(nb.Body(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+}

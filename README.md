@@ -30,12 +30,81 @@ Datadog every 10 s, tagged `run:<name>`.
 
 One binary, `aoc`, plays every role. Logs never leave the host.
 
-## Quick start
+## Quick start: A/B the latest release against a dev build
 
 ```bash
 cp .env.example .env          # DD_API_KEY (required), DD_APP_KEY (for notebooks), DD_SITE
 make build                    # ./bin/aoc
 
+$EDITOR aoc.yaml              # b.image: the development image to test
+./bin/aoc ab                  # a = datadog/agent:7 (latest), b = your image, same workload
+```
+
+[aoc.yaml](aoc.yaml) is the test run's config, in the spirit of
+`datadog.yaml`: every setting is listed with its default, uncomment what you
+change. The minimum is the workload and the two images:
+
+```yaml
+profile: profiles/baseline.yaml      # or the profile written inline
+a:
+  image: datadog/agent:7             # the control: re-pulled every run, so it is the latest 7.x
+b:
+  image: datadog/agent-dev:my-branch-py3
+  env:                               # settings only the candidate gets, e.g. the feature under test
+    DD_LOGS_CONFIG_TAG_FILTERS: '{"exclude":["env:*","dirname:*"]}'
+```
+
+`aoc ab` runs the profile against `a`, tears everything down, runs it
+against `b` (`runs: 3` alternates a, b, a, b, a, b and takes medians), then
+writes `results/<name>/`:
+
+| file | what |
+|---|---|
+| `compare.md` | the side-by-side table, b's delta against a, ✅/⚠️ per metric |
+| `ab.json` | the verdict for tooling: images, digests, agent versions, run windows, headline metrics |
+| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the A/B notebook: **both agents overlaid on every chart** (the earlier run is `timeshift`ed onto the later one), a real-time timeline of the session, the table, links per run |
+| `aoc.yaml` | the config that ran |
+| `a/`, `b/` (`a-2/`, `b-2/`, …) | a full [run directory](#what-a-run-writes) per side and round |
+
+In Datadog, every `aoc.*` metric and event, and the agent's own metrics and
+profiles, carry `experiment:<name>` and `variant:<a|b>` on top of
+`run:<name>-<side>`, so `… {experiment:my-feature} by {variant}` puts the
+two agents on one chart and the MCP can answer "compare
+`aoc.agent.process.cpu_percent` between variant a and b of my-feature". The
+finished test also posts a `source:aoc` event with the headline table.
+
+```bash
+aoc ab --plan                 # validate aoc.yaml, print what would run
+aoc ab --duration 45s         # a quick smoke of the config
+aoc ab --only b               # rebuilt the dev image: re-run b, reuse a's results
+aoc ab --compare-only         # re-render compare.md / the notebook from what is on disk
+aoc ab --config tests/rotation.yaml --runs 3
+```
+
+The terminal ends with the headline (here `a` named `release`, `b` named
+`tagfilter`, from a 40 s smoke of the log tag-filter build):
+
+```
+aoc ab smoke-ab — 7.83.2 (datadog/agent:7@29baa94e0a1a) vs 7.85.0-devel+git.404.9e35a50 (datadog/agent-dev:log-tag-filtering-9e35a50b-full@e6f1b0aac73d)
+
+                               release            tagfilter          Δ tagfilter vs release
+  delivery ratio               100.00%            100.00%            ≈
+  lost / missing               0                  0                  =
+  duplicates                   0                  0                  =
+  e2e latency p99              1.9s               1.9s               ≈
+  received wire B/s            247.4 kB/s         237.5 kB/s         -4.0% ✅
+  agent container CPU avg      16.1%              16.0%              ≈
+  agent container mem max      239.2 MB           626.2 MB           +161.9% ⚠️
+  tags per log                 4.12               2.07               -49.8% ✅
+  tag bytes per log            121.4 B            39.9 B             -67.2% ✅
+  …
+  results: results/smoke-ab/ (compare.md, ab.json, notebook.json, <side>/report.md …)
+  notebook: https://<org>.datadoghq.com/notebook/15601304
+```
+
+## One run at a time
+
+```bash
 ./bin/aoc run --profile profiles/baseline.yaml --name baseline --agent-image datadog/agent:7
 ```
 
@@ -45,9 +114,11 @@ scrapeable), waits for `agent health`, starts the generators, warms up, opens
 a measured window, stops the generators, drains, and writes
 `results/baseline/`:
 
+<a name="what-a-run-writes"></a>
+
 | file | what |
 |---|---|
-| `report.md` / `report.json` | the full report (delivery ledger, throughput, latency, resources, HTTP, tags, streams, agent telemetry deltas, per-minute table) |
+| `report.md` / `report.json` | the full report (delivery ledger, throughput, latency, resources, HTTP, tags, streams, agent telemetry deltas, per-minute table); the agent's version and the image digest that actually ran |
 | `notebook.json` | the Datadog notebook for the run (created for you when `DD_APP_KEY` is set) |
 | `timeseries.csv` | one row per second |
 | `agent-status.txt`, `agent.log`, `intake.log`, `gen-*.log` | what the containers said |
@@ -66,6 +137,9 @@ Then:
 ./bin/aoc compare results/baseline results/candidate            # Markdown delta table
 ./bin/aoc notebook --results results/baseline --results results/candidate   # one notebook, both runs
 ```
+
+(`aoc ab` is exactly this, driven by `aoc.yaml`, with the overlay notebook
+and the `experiment:`/`variant:` tags on top.)
 
 ## Notebooks
 
@@ -225,7 +299,8 @@ aoc report --intake http://localhost:8282 --stdout
 
 A profile is one reproducible experiment: workload per generator, agent
 image/env, fault timeline, warm-up/window/drain
-([profiles/README.md](profiles/README.md)). Shipped: `baseline`,
+([profiles/README.md](profiles/README.md)); `aoc.yaml` points at one (or
+inlines it) and `aoc run` takes one directly. Shipped: `baseline`,
 `high-throughput` (24 streams, 100k lines/s), `high-compression`,
 `rotation-churn` (128 KiB files, copytruncate vs rename), `multiline-heavy`,
 `intake-outage` (503 storm then 429s), `flaky-network` (dropped connections,
@@ -259,6 +334,7 @@ real intake; against the fake one, use the `drop_rate` / `read_bps` faults.
 make build            # ./bin/aoc (Go 1.25+)
 make test
 make image            # docker image used by the compose files
+make ab               # build, then run the A/B test in aoc.yaml
 go install github.com/UTXOnly/agent_of_chaos/cmd/aoc@latest
 ```
 
@@ -270,6 +346,11 @@ Dependencies: `klauspost/compress` (gzip/zstd) and `yaml.v3`.
   `aoc.stream.*` pair per stream with problems), each tagged with the run
   name, so every run creates a new set of custom-metric timeseries. Reuse
   names when you don't need a new record.
+* **"Latest" is pinned down**: `aoc ab` re-pulls `a`'s image before every
+  run (`pull: always`) and the report records the digest and the version
+  the agent announced, so a moving tag like `datadog/agent:7` is still a
+  reproducible statement. For an image you built locally, set
+  `pull: never`.
 * **Links to your org**: set `DD_SUBDOMAIN=<yours>` (or `DD_APP_URL`) in
   `.env` so notebook links open your subdomain rather than
   `app.datadoghq.com`.

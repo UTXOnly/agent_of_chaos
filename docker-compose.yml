@@ -18,7 +18,8 @@
 #   docker compose up -d --scale gen-plain=4     more generator containers
 #   -f docker-compose.offline.yml               no API key: metrics swallowed by the intake, nothing leaves the host
 #
-# `aoc run --profile profiles/<name>.yaml` drives all of this for you.
+# `aoc run --profile profiles/<name>.yaml` drives all of this for you, and
+# `aoc ab` (aoc.yaml) runs it twice — two agent images — and compares.
 
 name: aoc
 
@@ -131,7 +132,7 @@ services:
       DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-true}
       DD_INTERNAL_PROFILING_PERIOD: ${DD_INTERNAL_PROFILING_PERIOD:-60s}
       DD_INTERNAL_PROFILING_CPU_DURATION: ${DD_INTERNAL_PROFILING_CPU_DURATION:-60s}
-      DD_INTERNAL_PROFILING_EXTRA_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local}"
+      DD_INTERNAL_PROFILING_EXTRA_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local} ${DD_TAGS:-}"
     volumes:
       - aoc-logs:/var/log/agent-of-chaos:ro
       - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro
