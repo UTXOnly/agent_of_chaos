@@ -51,6 +51,13 @@ type Config struct {
 
 	// Datadog submits the harness's measurements as <prefix>.* metrics.
 	Datadog DDConfig
+
+	// ProfileForward is where the agent's continuous-profiler uploads are
+	// forwarded after a copy is kept: "auto" (the site's profile intake when
+	// Datadog submission is on), a URL, or "off".
+	ProfileForward string
+	// ProfileStoreBytes caps the uploads held in memory (default 256 MiB).
+	ProfileStoreBytes int64
 }
 
 // DefaultConfig returns sensible defaults: :8282 HTTP, :10516 TCP, 5 MB
@@ -65,17 +72,18 @@ func DefaultConfig() Config {
 
 // Server is the fake intake.
 type Server struct {
-	cfg     Config
-	stats   *Stats
-	faults  *faultState
-	agent   *agentObs
-	emitter *emitter
-	proc    procstat.Sampler
-	out     *os.File
-	mux     *http.ServeMux
-	http    *http.Server
-	start   time.Time
-	mu      sync.Mutex
+	cfg      Config
+	stats    *Stats
+	faults   *faultState
+	agent    *agentObs
+	emitter  *emitter
+	profiles *profileStore
+	proc     procstat.Sampler
+	out      *os.File
+	mux      *http.ServeMux
+	http     *http.Server
+	start    time.Time
+	mu       sync.Mutex
 }
 
 // New builds a server; nothing listens until Run.
@@ -113,6 +121,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Faults.Active() {
 		s.setFaults(cfg.Faults, "initial")
 	}
+	s.profiles = newProfileStore(profileForwardURL(cfg.ProfileForward, cfg.Datadog), cfg.Datadog.APIKey, cfg.ProfileStoreBytes, s.logf)
 	s.mux = http.NewServeMux()
 	s.routes()
 	return s, nil
@@ -133,6 +142,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /v1/input/{key}", s.handleLogs)
 	m.HandleFunc("POST /api/v1/logs", s.handleLogs)
 	m.HandleFunc("/api/v1/validate", s.handleValidate)
+	// The trace-agent's profiling proxy (apm_config.profiling_dd_url) and
+	// dd-trace-go's agentless path.
+	m.HandleFunc("POST /api/v2/profile", s.handleProfileUpload)
+	m.HandleFunc("POST /profiling/v1/input", s.handleProfileUpload)
 	// Harness API.
 	m.HandleFunc("POST "+wire.GenReportPath, s.handleGenReport)
 	m.HandleFunc("GET /harness/status", s.handleStatus)
@@ -143,6 +156,8 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /harness/faults", s.handleFaultsClear)
 	m.HandleFunc("POST /harness/reset", s.handleReset)
 	m.HandleFunc("POST /harness/mark", s.handleMark)
+	m.HandleFunc("GET /harness/profiles", s.handleProfilesList)
+	m.HandleFunc("GET /harness/profiles/{id}/{file}", s.handleProfileFile)
 	m.HandleFunc("GET /metrics", s.handleMetrics)
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok\n") })
 	// Everything else the agent may send (metrics, metadata, check runs,
@@ -511,6 +526,7 @@ type Status struct {
 	Generated        int64          `json:"generated"`
 	Generators       []GenStatus    `json:"generators"`
 	Observer         ObserverStatus `json:"observer"`
+	Profiles         ProfileStatus  `json:"profiles"`
 	DDMetrics        EmitterStatus  `json:"dd_metrics"`
 }
 
@@ -543,6 +559,7 @@ func (s *Server) status() *Status {
 	if s.emitter != nil {
 		out.DDMetrics = s.emitter.status()
 	}
+	out.Profiles = s.profiles.status()
 	st.mu.Lock()
 	pts := st.ts.since(now.Unix() - 10)
 	for name, g := range st.gens {
@@ -587,11 +604,11 @@ func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeCSV(w io.Writer, pts []Point) {
-	fmt.Fprintln(w, "t,requests,logs,lines,raw_bytes,wire_bytes,err_4xx,err_5xx,dropped,gen_records,gen_lines,gen_bytes,e2e_p50,e2e_p99,e2e_max,sender_p50,sender_p99,agent_cpu,agent_mem,proc_cpu,proc_rss,inflight")
+	fmt.Fprintln(w, "t,requests,logs,lines,raw_bytes,wire_bytes,err_4xx,err_5xx,dropped,gen_records,gen_lines,gen_bytes,e2e_p50,e2e_p99,e2e_max,sender_p50,sender_p99,agent_cpu,agent_mem,proc_cpu,proc_rss,inflight,agent_mem_anon,agent_mem_file")
 	for _, p := range pts {
-		fmt.Fprintf(w, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%.1f,%.1f,%.1f,%.6f,%.6f,%.6f,%.6f,%.6f,%.2f,%d,%.2f,%d,%d\n",
+		fmt.Fprintf(w, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%.1f,%.1f,%.1f,%.6f,%.6f,%.6f,%.6f,%.6f,%.2f,%d,%.2f,%d,%d,%d,%d\n",
 			p.T, p.Requests, p.Logs, p.Lines, p.RawBytes, p.WireBytes, p.Err4xx, p.Err5xx, p.Dropped, p.GenRecords, p.GenLines, p.GenBytes,
-			p.E2EP50, p.E2EP99, p.E2EMax, p.SenderP50, p.SenderP99, p.AgentCPU, p.AgentMem, p.ProcCPU, p.ProcRSS, p.Inflight)
+			p.E2EP50, p.E2EP99, p.E2EMax, p.SenderP50, p.SenderP99, p.AgentCPU, p.AgentMem, p.ProcCPU, p.ProcRSS, p.Inflight, p.AgentAnon, p.AgentFile)
 	}
 }
 
@@ -654,6 +671,7 @@ func (s *Server) handleFaultsClear(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	s.stats.Reset()
 	s.proc.Reset()
+	s.profiles.reset()
 	if name := r.URL.Query().Get("name"); name != "" {
 		s.mu.Lock()
 		s.cfg.Name = name

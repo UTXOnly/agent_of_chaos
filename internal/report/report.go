@@ -30,6 +30,12 @@ type Report struct {
 	Telemetry  []Telemetry  `json:"telemetry"`
 	Faults     []FaultEvent `json:"faults"`
 	Minutes    []Minute     `json:"minutes"`
+	// Profiles are the agent's own continuous-profiler uploads over the
+	// window, reduced to per-function tables (aoc run keeps the pprof files
+	// under profiles/ in the results directory).
+	Profiles []ProfileSummary `json:"profiles,omitempty"`
+	// AgentLog summarises the agent's log output (agent.log) over the run.
+	AgentLog *LogSummary `json:"agent_log,omitempty"`
 }
 
 // Agent identifies the agent under test from what it sent.
@@ -41,6 +47,10 @@ type Agent struct {
 	Encodings map[string]int64 `json:"encodings"`  // Content-Encoding → requests
 	Paths     map[string]int64 `json:"paths"`      // logs endpoint → requests
 	Image     string           `json:"image,omitempty"`
+	ImageID   string           `json:"image_id,omitempty"`  // docker image ID the container ran (aoc run)
+	Digest    string           `json:"digest,omitempty"`    // registry digest, repo@sha256:… (aoc run, pulled images)
+	Commit    string           `json:"commit,omitempty"`    // git.commit.sha the agent's profiler reported
+	Repo      string           `json:"repo,omitempty"`      // git.repository_url from the same tags
 	Container string           `json:"container,omitempty"` // docker container name observed for CPU/memory
 	Hostname  string           `json:"hostname,omitempty"`  // most common hostname in received logs
 }
@@ -213,6 +223,62 @@ type Resources struct {
 	IntakeRSSMax       int64   `json:"intake_rss_max_bytes"`
 	GenCPUAvg          float64 `json:"gen_cpu_avg_percent"`          // summed across generators
 	CPUSecondsPerMLogs float64 `json:"cpu_seconds_per_million_logs"` // process CPU per 1M logs delivered
+	// cgroup memory breakdown of the container: anon is the processes' own
+	// memory, file the page cache charged to the container.
+	ContainerAnonAvg int64 `json:"container_anon_avg_bytes,omitempty"`
+	ContainerAnonMax int64 `json:"container_anon_max_bytes,omitempty"`
+	ContainerFileAvg int64 `json:"container_file_avg_bytes,omitempty"`
+	ContainerFileMax int64 `json:"container_file_max_bytes,omitempty"`
+	// Processes is every process in the container (docker top), largest
+	// RSS first: which process a container-level change belongs to.
+	Processes []ProcessStat `json:"processes,omitempty"`
+}
+
+// ProcessStat is one process (by command name; same-named processes are
+// summed) in the agent container over the window.
+type ProcessStat struct {
+	Name    string  `json:"name"`
+	RSSAvg  int64   `json:"rss_avg_bytes"`
+	RSSMax  int64   `json:"rss_max_bytes"`
+	CPUAvg  float64 `json:"cpu_avg_percent"`
+	CPUMax  float64 `json:"cpu_max_percent"`
+	Samples int     `json:"samples"`
+}
+
+// ProfileSummary is one profile view (a service, a file, a sample type)
+// merged over the window: the total and the top functions by flat value.
+// Rates (CPU %, allocation B/s) are per wall-clock second; levels (heap in
+// use, goroutines) are averages over the captures.
+type ProfileSummary struct {
+	Service     string  `json:"service"`
+	File        string  `json:"file"`
+	SampleType  string  `json:"sample_type"`
+	Label       string  `json:"label"`
+	Unit        string  `json:"unit"`
+	Captures    int     `json:"captures"`
+	WallSeconds float64 `json:"wall_seconds"`
+	Total       float64 `json:"total"`
+	Top         []Frame `json:"top"`
+}
+
+// Frame is one function's flat and cumulative value in a ProfileSummary,
+// with where it lives (the source file and line of the sampled leaf).
+type Frame struct {
+	Function string  `json:"function"`
+	File     string  `json:"file,omitempty"`
+	Line     int64   `json:"line,omitempty"`
+	Flat     float64 `json:"flat"`
+	Cum      float64 `json:"cum"`
+}
+
+// LogSummary counts the agent's log lines by level and keeps the most
+// repeated warnings and errors (message with numbers replaced by #).
+type LogSummary struct {
+	Lines     int64       `json:"lines"`
+	Errors    int64       `json:"errors"`
+	Warnings  int64       `json:"warnings"`
+	Truncated bool        `json:"truncated,omitempty"` // only the tail of the log was captured
+	Top       []NameCount `json:"top,omitempty"`       // "LEVEL | message" → count
 }
 
 // Telemetry is one agent-internal metric over the window.

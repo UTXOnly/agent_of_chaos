@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -361,5 +362,88 @@ func TestParseSample(t *testing.T) {
 	n, l, v, ok = parseSample(`go_goroutines 42`)
 	if !ok || n != "go_goroutines" || l != "" || v != 42 {
 		t.Errorf("%s %s %v %v", n, l, v, ok)
+	}
+}
+
+func TestProfileTee(t *testing.T) {
+	var got []string
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("DD-API-KEY")+" "+r.Header.Get("Content-Type"))
+		b, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(b), "cpu.pprof") {
+			t.Errorf("forwarded body lost the attachment")
+		}
+		w.WriteHeader(202)
+	}))
+	defer sink.Close()
+	cfg := DefaultConfig()
+	cfg.ProfileForward = sink.URL + "/api/v2/profile"
+	s, ts := newTestServer(t, cfg)
+	defer ts.Close()
+
+	build := func(start string) ([]byte, string) {
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		ev, _ := mw.CreateFormFile("event", "event.json")
+		ev.Write([]byte(`{"start":"` + start + `","end":"2026-09-20T12:01:00Z","family":"go","tags_profiler":"service:datadog-agent,run:x","attachments":["cpu.pprof"]}`))
+		f, _ := mw.CreateFormFile("cpu.pprof", "cpu.pprof")
+		f.Write([]byte("fake-pprof-bytes"))
+		mw.Close()
+		return buf.Bytes(), mw.FormDataContentType()
+	}
+	body, ct := build("2026-09-20T12:00:00Z")
+	resp := post(t, ts.URL+"/api/v2/profile", body, map[string]string{"Content-Type": ct, "DD-API-KEY": "k"})
+	if resp.StatusCode != 202 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	// A re-sent period replaces, not duplicates.
+	post(t, ts.URL+"/api/v2/profile", body, map[string]string{"Content-Type": ct, "DD-API-KEY": "k"})
+	body2, ct2 := build("2026-09-20T12:01:00Z")
+	post(t, ts.URL+"/api/v2/profile", body2, map[string]string{"Content-Type": ct2, "DD-API-KEY": "k"})
+
+	st := s.profiles.status()
+	if st.Received != 3 || st.Forwarded != 3 || st.ForwardErrors != 0 || st.Held != 2 {
+		t.Fatalf("status %+v", st)
+	}
+	if len(got) != 3 || !strings.HasPrefix(got[0], "k multipart/form-data") {
+		t.Errorf("sink saw %v", got)
+	}
+	r, _ := http.Get(ts.URL + "/harness/profiles")
+	var list struct {
+		Uploads []ProfileUpload `json:"uploads"`
+	}
+	json.NewDecoder(r.Body).Decode(&list)
+	r.Body.Close()
+	if len(list.Uploads) != 2 || list.Uploads[0].Service != "datadog-agent" || list.Uploads[0].Start.Format(time.RFC3339) != "2026-09-20T12:00:00Z" || len(list.Uploads[0].Files) != 2 {
+		t.Fatalf("list: %+v", list.Uploads)
+	}
+	fr, _ := http.Get(fmt.Sprintf("%s/harness/profiles/%d/cpu.pprof", ts.URL, list.Uploads[0].ID))
+	fb, _ := io.ReadAll(fr.Body)
+	fr.Body.Close()
+	if string(fb) != "fake-pprof-bytes" {
+		t.Errorf("file: %q", fb)
+	}
+	// Reset drops the held uploads.
+	post(t, ts.URL+"/harness/reset", nil, nil)
+	if st := s.profiles.status(); st.Held != 0 {
+		t.Errorf("after reset held=%d", st.Held)
+	}
+}
+
+func TestParseTop(t *testing.T) {
+	procs, err := parseTop([]string{"PID", "RSS", "TIME", "COMMAND"}, [][]string{
+		{"1", "1000", "12", "/opt/datadog-agent/bin/agent/agent run -p /opt/datadog-agent/run/agent.pid"},
+		{"2", "500", "3", "/opt/datadog-agent/embedded/bin/trace-agent --config=/etc/datadog-agent/datadog.yaml"},
+		{"3", "200", "1", "agent"},
+		{"4", "300", "0", "/opt/datadog-agent/embedded/bin/system-probe-lite-with-a-long-name run"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if procs["agent"].RSS != 1200*1024 || procs["agent"].CPUTime != 13 || procs["trace-agent"].RSS != 500*1024 || procs["system-probe-lite-with-a-long-name"].RSS != 300*1024 {
+		t.Errorf("%+v", procs)
+	}
+	if _, err := parseTop([]string{"PID", "COMMAND"}, nil); err == nil {
+		t.Error("missing columns should error")
 	}
 }

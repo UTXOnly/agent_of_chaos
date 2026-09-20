@@ -453,6 +453,8 @@ type Point struct {
 	ProcCPU    float64 `json:"proc_cpu"`  // core-agent process CPU %, from telemetry; -1 unknown
 	ProcRSS    int64   `json:"proc_rss"`
 	Inflight   int64   `json:"inflight"`
+	AgentAnon  int64   `json:"agent_mem_anon"` // container anon memory (processes' own), -1 unknown
+	AgentFile  int64   `json:"agent_mem_file"` // container file cache, -1 unknown
 }
 
 type timeseries struct {
@@ -495,9 +497,10 @@ func (t *timeseries) roll(now time.Time, s *Stats) {
 			p.SenderP50, p.SenderP99 = t.senderOpen.quantile(0.5), t.senderOpen.quantile(0.99)
 		}
 		p.GenRecords, p.GenLines, p.GenBytes = s.genRates(time.Unix(p.T, 0))
-		p.AgentCPU, p.AgentMem, p.ProcCPU, p.ProcRSS = -1, -1, -1, -1
+		p.AgentCPU, p.AgentMem, p.ProcCPU, p.ProcRSS, p.AgentAnon, p.AgentFile = -1, -1, -1, -1, -1, -1
 		if s.agent != nil {
 			p.AgentCPU, p.AgentMem, p.ProcCPU, p.ProcRSS = s.agent.current(time.Unix(p.T+1, 0))
+			p.AgentAnon, p.AgentFile = s.agent.memBreakdown(time.Unix(p.T+1, 0))
 		}
 		p.Inflight = s.inflight.Load()
 		t.ring[t.head] = p

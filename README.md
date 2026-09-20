@@ -30,12 +30,122 @@ Datadog every 10 s, tagged `run:<name>`.
 
 One binary, `aoc`, plays every role. Logs never leave the host.
 
-## Quick start
+## Quick start: A/B the latest release against a dev build
 
 ```bash
-cp .env.example .env          # DD_API_KEY (required), DD_APP_KEY (for notebooks), DD_SITE
+cp .env.example .env          # DD_API_KEY (required), DD_APP_KEY (for notebooks), DD_SUBDOMAIN; the CLI reads it too
 make build                    # ./bin/aoc
 
+$EDITOR aoc.yaml              # b.image: the development image to test
+./bin/aoc ab                  # a = datadog/agent:7 (latest), b = your image, same workload, 10 min each
+cat results/ab-baseline/findings.md
+```
+
+[aoc.yaml](aoc.yaml) is the test run's config, in the spirit of
+`datadog.yaml`: every setting is listed with its default, uncomment what you
+change. The minimum is the workload and the two images:
+
+```yaml
+profile: profiles/baseline.yaml      # or the profile written inline
+duration: 10m                        # several profiling periods per side
+a:
+  image: datadog/agent:7             # the control: re-pulled every run, so it is the latest 7.x
+b:
+  image: datadog/agent-dev:my-branch-py3
+  env:                               # settings only the candidate gets, e.g. the feature under test
+    DD_LOGS_CONFIG_TAG_FILTERS: '{"exclude":["env:*","dirname:*"]}'
+```
+
+`aoc ab` runs the profile against `a`, tears everything down, runs it
+against `b` (`runs: 2` alternates a, b, a, b and takes medians), and writes
+an **investigation brief** rather than a wall of metrics:
+
+| file | what |
+|---|---|
+| `findings.md` | **the brief.** What we tested (images, versions, commits, what only one side had, the workload); what differed (regressions beyond `threshold`, 10 % by default, improvements, and only the rows that moved); where — per regressed topic a one-sentence reading derived from the numbers ("the container grew through page cache, not process memory"), the tables that explain it (anon vs page cache, processes that moved, the agent's own CPU/heap/allocation profiles diffed **function by function** with each mover's `file:line`), pipeline utilization, retries, the log's repeated errors; the profiles; and **the code** — each mover located in the agent's source at the tested commit, with whether its file changed between the two builds (given a checkout, `source:`). Your conclusion goes on top once you have one |
+| `compare.md` | every metric side by side, the per-process table, the agent's telemetry counters |
+| `ab.json`, `findings.json` | the same for tooling: images, digests, versions, windows, findings, file paths, notebook URL |
+| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the Datadog notebook in the same order — tested, differed, conclusion, where, profiles and code — with each side's **profiler embedded** (same-origin iframe of the flame graph explorer, scoped to the run) and only the charts that bear on what moved, **both agents overlaid** (the earlier run `timeshift`ed onto the later one) |
+| `a/`, `b/` (`a-2/`, `b-2/`, …) | a full [run directory](#what-a-run-writes) per side and round, including `profiles/` — the agent's pprof uploads over the window |
+| `aoc.yaml` | the config that ran |
+
+The profiles are the point: the agent's continuous profiler is on, the
+trace-agent's upload proxy is pointed at the intake, and the intake keeps a
+copy of every upload while forwarding it to Datadog unchanged. So "memory
+went up 160 %" comes with "anon, not page cache; in `python3`, not the core
+agent; core heap in use by function unchanged" — or with the function that
+grew.
+
+In Datadog, every `aoc.*` metric and event, and the agent's own metrics and
+profiles, carry `experiment:<name>` and `variant:<a|b>` on top of
+`run:<name>-<side>`, so `… {experiment:my-feature} by {variant}` puts the
+two agents on one chart. The finished test posts a `source:aoc` event with
+the verdict, and `aoc conclude --results results/<name> "…"` records what
+the investigation found next to it.
+
+```bash
+aoc ab --plan                 # validate aoc.yaml, print what would run
+aoc ab --duration 2m          # a quick smoke of the config
+aoc ab --only b               # rebuilt the dev image: re-run b, reuse a's results
+aoc ab --compare-only         # re-render the brief / the notebook from what is on disk
+aoc ab --config tests/rotation.yaml --runs 2 --threshold 5
+aoc conclude --results results/rotation --verdict pass "…"   # → conclusion.md, an event, the notebook's first cell
+```
+
+The terminal ends with what differed and the one-sentence reading per
+regression; the brief has the rest. From a 2½-minute smoke of the log
+tag-filter build against the release:
+
+```
+  ⚠️ 2 regression(s): agent container mem max 553.3 MB → 643.2 MB (+16.3% ⚠️); compression ratio 20.82× → 18.07× (-13.2% ⚠️)
+  ✅ 5 improvement(s): core agent Go heap in use 87.7 MB → 67.8 MB (-22.8% ✅); core agent RSS max … ; tag bytes per log 119.3 B → 39.3 B (-67.1% ✅); tags per log 4.05 → 2.04 (-49.7% ✅)
+  memory: The container grew through page cache (file 308.4 MB → 410.7 MB), not process memory (anon 199.0 MB → 179.0 MB): files read, not a leak. Not a regression.
+  bytes: The compression ratio fell because the bytes removed (tags, −80 B per log) were the most repetitive ones; bytes on the wire still went 248.2 kB/s → 242.1 kB/s (-2.4%). Not a regression.
+```
+
+and `findings.md` goes from the numbers to the code:
+
+```
+## What we tested
+release = 7.83.2 (datadog/agent:7@29baa94e0a1a), commit 1183252e · tagfilter = 7.85.0-devel+git.404.9e35a50
+(datadog/agent-dev:log-tag-filtering-9e35a50b-full@e6f1b0aac73d), commit 9e35a50b. Only tagfilter has
+DD_LOGS_CONFIG_TAG_FILTERS={"exclude":["env:*","dirname:*","filename:*"]}. Workload baseline — 16 streams
+at 9,862/s, 2m32s window, 1 round per side. Delivery 100.00% vs 100.00%, lost 0 vs 0, duplicates 0 vs 0.
+
+## Where
+### Memory — agent container mem max 553.3 MB → 643.2 MB (+16.3% ⚠️)
+The container grew through page cache (file 308 → 411 MB), not process memory (anon 199 → 179 MB) …
+| container memory max | 553.3 MB | 643.2 MB | +16.3% ⚠️ |
+| ├ anon: the processes' own memory | 199.0 MB | 179.0 MB | -10.0% ✅ |
+| ├ file: page cache charged to the container | 308.4 MB | 410.7 MB | +33.2% |
+
+## Profiles
+allocation rate — 22.6 MB/s → 23.1 MB/s (+448.5 kB/s)
+| tagfilter.(*Scoped).Keep | comp/logs-library/tagfilter/tagfilter.go:364 | 0 B/s | 395.2 kB/s | +395.2 kB/s |
+
+## Code
+| function                 | view            | Δ           | source                                       | changed a → b |
+| tagfilter.(*Scoped).Keep | allocation rate | +395.2 kB/s | comp/logs-library/tagfilter/tagfilter.go:364 | new in b      |
+```
+
+From there the investigation is `git show 9e35a50b:comp/logs-library/tagfilter/tagfilter.go`
+around line 364, and the conclusion — what the difference is, where, and what
+to change — goes on top of the brief and the notebook with `aoc conclude`.
+(The earlier 40-second smoke had reported "+162 % container memory" for the
+same build; it was this page cache.)
+
+### For coding agents
+
+The repository ships its own workflow: [AGENTS.md](AGENTS.md) (what to
+read, what never to read, the commands), [`CLAUDE.md`](CLAUDE.md), two
+skills — `ab-test` (configure, run, read the brief) and `investigate` (from
+`findings.md` to a conclusion with a bounded number of Datadog MCP calls) —
+and path-scoped rules for `results/` and the measurement code. The brief is
+written so that an agent reads one ~10 KB file, not a results directory.
+
+## One run at a time
+
+```bash
 ./bin/aoc run --profile profiles/baseline.yaml --name baseline --agent-image datadog/agent:7
 ```
 
@@ -45,9 +155,12 @@ scrapeable), waits for `agent health`, starts the generators, warms up, opens
 a measured window, stops the generators, drains, and writes
 `results/baseline/`:
 
+<a name="what-a-run-writes"></a>
+
 | file | what |
 |---|---|
-| `report.md` / `report.json` | the full report (delivery ledger, throughput, latency, resources, HTTP, tags, streams, agent telemetry deltas, per-minute table) |
+| `report.md` / `report.json` | the full report (delivery ledger, throughput, latency, resources incl. every process and the anon/file memory split, HTTP, tags, streams, agent telemetry deltas, profile tables, agent log digest, per-minute table); the agent's version and the image digest that actually ran |
+| `profiles/<service>/<start>/` | the agent's continuous-profiler uploads over the window (`event.json`, `cpu.pprof`, `delta-heap.pprof`, …), tee'd by the intake |
 | `notebook.json` | the Datadog notebook for the run (created for you when `DD_APP_KEY` is set) |
 | `timeseries.csv` | one row per second |
 | `agent-status.txt`, `agent.log`, `intake.log`, `gen-*.log` | what the containers said |
@@ -66,6 +179,9 @@ Then:
 ./bin/aoc compare results/baseline results/candidate            # Markdown delta table
 ./bin/aoc notebook --results results/baseline --results results/candidate   # one notebook, both runs
 ```
+
+(`aoc ab` is exactly this, driven by `aoc.yaml`, with the overlay notebook
+and the `experiment:`/`variant:` tags on top.)
 
 ## Notebooks
 
@@ -91,17 +207,16 @@ force, or write only).
 
 ## Investigating with the Datadog MCP
 
-Everything is a normal metric or event, so the MCP can answer questions
-about a run without any of this tooling:
+Everything is a normal metric, event or profile, so the MCP can answer
+questions about a run without any of this tooling — and `findings.md`
+tells you which questions are worth asking, with the filters filled in:
 
-- "query `aoc.intake.latency.e2e.p99` and `aoc.gen.records_per_sec` for
-  `run:candidate` and explain the spikes"
-- "compare `aoc.agent.process.cpu_percent` between `run:baseline` and
-  `run:candidate`"
-- "what happened around the `source:aoc run:candidate` events?"
-- "show the CPU flame graph for `service:datadog-agent run:candidate`
-  filtered to `logs` frames" — the agent's internal profiler is on by default
-  and uploads one profile per minute
+- "show the CPU flame graph for `service:datadog-agent run:x-b` over its
+  window, filtered to `tagfilter`" — the function the local diff named
+- "`avg:aoc.agent.proc.rss_bytes{experiment:x} by {variant,proc}`" — a
+  ramp is a leak, a step is a cache
+- "compare `aoc.agent.process.cpu_percent` between variant a and b of `x`"
+- "what happened around the `source:aoc run:x-b` events?"
 
 The metric catalog is in [docs/datadog.md](docs/datadog.md).
 
@@ -112,7 +227,8 @@ The metric catalog is in [docs/datadog.md](docs/datadog.md).
 | Did everything arrive? | Per-stream ledger from the `aoc=<gen>/<stream>/<seq>` marker: unique, **missing**, **duplicates**, out of order, first missing seq ranges (gaps line up with rotations). Generators push their own counters, so "generated" is known independently of what arrived. |
 | Was multiline aggregation right? | Traces written vs multiline logs received; **orphan continuation lines** = stack-trace lines the agent shipped as separate logs. |
 | How long did it take? | **written → received** per log (timestamp inside the line), and **agent encode → received** (the agent's `timestamp` field), as p50/p90/p99/p99.9/max. |
-| What did it cost? | Agent **container CPU/memory** (Docker API), **core agent process CPU/RSS** (from the agent's `process_*` telemetry), **CPU seconds per 1M logs**, wire bytes vs decompressed bytes (compression ratio), bytes/tags per log. |
+| What did it cost? | Agent **container CPU/memory** (Docker API) split into **anon vs page cache**, **every process's RSS/CPU** (`docker top`), **core agent process CPU/RSS** (from the agent's `process_*` telemetry), **CPU seconds per 1M logs**, wire bytes vs decompressed bytes (compression ratio), bytes/tags per log. |
+| Where did it go? | The agent's own **continuous-profiler uploads** — CPU, heap in use, allocation rate — merged over the window and reduced by function; `aoc ab` diffs the two builds function by function. |
 | What did the agent do? | Every `logs*` series from the agent's `/telemetry` endpoint — `logs__bytes_sent`, `logs__sender_latency`, `logs__rotations_nix`, `logs_component_utilization__ratio`, … — as deltas over the window and as `aoc.agent.telemetry.*` rates in Datadog. Requests by status, payload sizes, logs per payload, encodings, agent version. |
 | What did the agent send? | Tag-key cardinality and tag bytes per log (the number the tag-filter feature moves), service/source/host/status breakdown. |
 
@@ -225,7 +341,8 @@ aoc report --intake http://localhost:8282 --stdout
 
 A profile is one reproducible experiment: workload per generator, agent
 image/env, fault timeline, warm-up/window/drain
-([profiles/README.md](profiles/README.md)). Shipped: `baseline`,
+([profiles/README.md](profiles/README.md)); `aoc.yaml` points at one (or
+inlines it) and `aoc run` takes one directly. Shipped: `baseline`,
 `high-throughput` (24 streams, 100k lines/s), `high-compression`,
 `rotation-churn` (128 KiB files, copytruncate vs rename), `multiline-heavy`,
 `intake-outage` (503 storm then 429s), `flaky-network` (dropped connections,
@@ -259,6 +376,7 @@ real intake; against the fake one, use the `drop_rate` / `read_bps` faults.
 make build            # ./bin/aoc (Go 1.25+)
 make test
 make image            # docker image used by the compose files
+make ab               # build, then run the A/B test in aoc.yaml
 go install github.com/UTXOnly/agent_of_chaos/cmd/aoc@latest
 ```
 
@@ -270,6 +388,11 @@ Dependencies: `klauspost/compress` (gzip/zstd) and `yaml.v3`.
   `aoc.stream.*` pair per stream with problems), each tagged with the run
   name, so every run creates a new set of custom-metric timeseries. Reuse
   names when you don't need a new record.
+* **"Latest" is pinned down**: `aoc ab` re-pulls `a`'s image before every
+  run (`pull: always`) and the report records the digest and the version
+  the agent announced, so a moving tag like `datadog/agent:7` is still a
+  reproducible statement. For an image you built locally, set
+  `pull: never`.
 * **Links to your org**: set `DD_SUBDOMAIN=<yours>` (or `DD_APP_URL`) in
   `.env` so notebook links open your subdomain rather than
   `app.datadoghq.com`.

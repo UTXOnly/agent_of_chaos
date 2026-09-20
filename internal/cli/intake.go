@@ -44,6 +44,8 @@ func runIntake(args []string) int {
 	container := fs.Str("docker-container", "", "agent container name for CPU/memory via the Docker API")
 	socket := fs.Str("docker-socket", d.DockerSocket, "Docker socket path")
 	image := fs.Str("agent-image", "", "agent image name, recorded in the report")
+	profileForward := fs.Str("profile-forward", "auto", "where the agent's profiler uploads (POST /api/v2/profile, via the trace-agent's apm_config.profiling_dd_url) go after a copy is kept for the run: auto = the site's profile intake when --dd-metrics is on, a URL, or off")
+	profileStore := fs.Size("profile-store-bytes", 256<<20, "memory cap for the held profile uploads")
 
 	fs.section("Faults (initial; change live with POST /harness/faults, or a profile timeline)")
 	fLatency := fs.Int("fault-latency-ms", 0, "delay every response by this many ms")
@@ -76,6 +78,7 @@ func runIntake(args []string) int {
 	cfg.APIKey, cfg.MaxPayloadBytes, cfg.Strict = *apiKey, *maxPayload, *strict
 	cfg.AgentTelemetryURL, cfg.TelemetryFilter, cfg.ScrapeInterval = *telemetry, *telemetryFilter, *scrape
 	cfg.DockerContainer, cfg.DockerSocket, cfg.AgentImage = *container, *socket, *image
+	cfg.ProfileForward, cfg.ProfileStoreBytes = *profileForward, *profileStore
 	cfg.Faults = intake.Faults{LatencyMs: *fLatency, JitterMs: *fJitter, ErrorRate: *fErrRate, ErrorStatus: *fErrStatus, DropRate: *fDrop, Outage: *fOutage, ReadBps: *fReadBps}
 	if !cfg.Faults.Active() {
 		cfg.Faults = intake.Faults{}

@@ -16,9 +16,11 @@
 #   AOC_RATE=20000 AOC_STREAMS=16               per-generator workload
 #   docker compose --profile stdout up -d        add a generator that logs to stdout (docker log driver path)
 #   docker compose up -d --scale gen-plain=4     more generator containers
+#   AOC_PROFILE_FORWARD=off                      keep the agent's profile uploads local, do not forward to Datadog
 #   -f docker-compose.offline.yml               no API key: metrics swallowed by the intake, nothing leaves the host
 #
-# `aoc run --profile profiles/<name>.yaml` drives all of this for you.
+# `aoc run --profile profiles/<name>.yaml` drives all of this for you, and
+# `aoc ab` (aoc.yaml) runs it twice — two agent images — and compares.
 
 name: aoc
 
@@ -70,6 +72,10 @@ services:
       - --docker-container=aoc-agent
       - --agent-image=${DD_AGENT_IMAGE:-datadog/agent:7}
       - --dd-tags=${AOC_DD_TAGS:-harness:aoc}
+      # The agent's profiler uploads arrive here (see DD_APM_PROFILING_DD_URL
+      # below): a copy is kept for the results directory, the upload is
+      # forwarded to Datadog unchanged. off = keep local copies only.
+      - --profile-forward=${AOC_PROFILE_FORWARD:-auto}
     environment:
       DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env (or use docker-compose.offline.yml)}
       DD_SITE: ${DD_SITE:-datadoghq.com}
@@ -131,7 +137,11 @@ services:
       DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-true}
       DD_INTERNAL_PROFILING_PERIOD: ${DD_INTERNAL_PROFILING_PERIOD:-60s}
       DD_INTERNAL_PROFILING_CPU_DURATION: ${DD_INTERNAL_PROFILING_CPU_DURATION:-60s}
-      DD_INTERNAL_PROFILING_EXTRA_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local}"
+      DD_INTERNAL_PROFILING_EXTRA_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local} ${DD_TAGS:-}"
+      # The trace-agent proxies those uploads to this URL instead of
+      # intake.profile.<site>: the intake keeps the pprof files for the run
+      # (results/<run>/profiles/) and forwards them to Datadog itself.
+      DD_APM_PROFILING_DD_URL: ${DD_APM_PROFILING_DD_URL:-http://localhost:8282/api/v2/profile}
     volumes:
       - aoc-logs:/var/log/agent-of-chaos:ro
       - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro

@@ -39,3 +39,41 @@ func TestMarkdownAndCompare(t *testing.T) {
 		t.Errorf("compare ratio row wrong:\n%s", cmp)
 	}
 }
+
+func TestCompareColumnsMedianAndHeadline(t *testing.T) {
+	a1, a2, a3 := sample("x-a", 1000), sample("x-a-2", 1000), sample("x-a-3", 1000)
+	a1.Resources.ContainerCPUAvg, a2.Resources.ContainerCPUAvg, a3.Resources.ContainerCPUAvg = 30, 50, 40
+	b1, b2 := sample("x-b", 990), sample("x-b-2", 1000)
+	b1.Resources.ContainerCPUAvg, b2.Resources.ContainerCPUAvg = 60, 70
+	b1.Agent.Image, b1.Agent.Digest = "datadog/agent-dev:x", "datadog/agent-dev@sha256:0123456789abcdef0123"
+	cols := []Column{{Name: "release", Runs: []*Report{a1, a2, a3}}, {Name: "candidate", Runs: []*Report{b1, b2}}}
+	md := CompareColumns(cols)
+	for _, want := range []string{
+		"| runs (values are medians) | 3 | 2 |",
+		"| agent container CPU avg | 40.0% | 65.0% | +62.5% ⚠️ |", // medians: 40 and (60+70)/2
+		"| lost / missing | 0 | 5 |",                              // median of 10 and 0
+		"7.99 (datadog/agent-dev:x@0123456789ab)",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("compare missing %q:\n%s", want, md)
+		}
+	}
+	rows := Headline(cols)
+	if len(rows) != len(headlineMetrics) {
+		t.Fatalf("headline rows = %d", len(rows))
+	}
+	if rows[0].Metric != "delivery ratio" || rows[0].Cells[0] != "100.00%" || rows[0].Cells[1] != "99.50%" || rows[0].Deltas[0] != "-0.5% ⚠️" {
+		t.Errorf("headline row 0: %+v", rows[0])
+	}
+}
+
+func TestMedian(t *testing.T) {
+	for _, c := range []struct {
+		in   []float64
+		want float64
+	}{{nil, 0}, {[]float64{3}, 3}, {[]float64{3, 1}, 2}, {[]float64{5, 1, 3}, 3}, {[]float64{4, 1, 3, 2}, 2.5}} {
+		if got := Median(append([]float64(nil), c.in...)); got != c.want {
+			t.Errorf("median(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

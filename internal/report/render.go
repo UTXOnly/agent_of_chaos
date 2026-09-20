@@ -38,11 +38,7 @@ func Markdown(r *Report) string {
 
 	p("# aoc run: %s\n\n", r.Name)
 	p("%s · window %s → %s (%s)\n\n", r.GeneratedAt.UTC().Format("2006-01-02 15:04 UTC"), r.WindowStart.UTC().Format("15:04:05"), r.WindowEnd.UTC().Format("15:04:05"), fmtutil.Duration(time.Duration(r.Seconds*float64(time.Second))))
-	agent := keys(r.Agent.Versions)
-	if r.Agent.Image != "" {
-		agent += " (" + r.Agent.Image + ")"
-	}
-	p("**Agent** %s · encodings %s · paths %s  \n", agent, keys(r.Agent.Encodings), keys(r.Agent.Paths))
+	p("**Agent** %s · encodings %s · paths %s  \n", AgentLabel(r), keys(r.Agent.Encodings), keys(r.Agent.Paths))
 	var gens []string
 	for _, g := range r.Generators {
 		rate := "flat out"
@@ -277,7 +273,11 @@ func Summary(r *Report) string {
 	d, t, l, res := r.Delivery, r.Throughput, r.Latency, r.Resources
 	agent := keys(r.Agent.Versions)
 	if r.Agent.Image != "" {
-		agent += " (`" + r.Agent.Image + "`)"
+		agent += " (`" + r.Agent.Image
+		if d := ShortDigest(r.Agent.Digest); d != "" {
+			agent += "@" + d
+		}
+		agent += "`)"
 	}
 	p("**Agent** %s · **window** %s → %s UTC (%s) · **encodings** %s\n\n",
 		agent, r.WindowStart.UTC().Format("2006-01-02 15:04:05"), r.WindowEnd.UTC().Format("15:04:05"),
