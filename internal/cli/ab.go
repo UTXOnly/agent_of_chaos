@@ -417,6 +417,8 @@ func runAB(args []string) int {
 	os.WriteFile(filepath.Join(root, "findings.md"), []byte(findingsMD), 0o644)
 	if b, err := json.MarshalIndent(res, "", "  "); err == nil {
 		os.WriteFile(filepath.Join(root, "findings.json"), b, 0o644)
+	} else {
+		fmt.Fprintf(os.Stderr, "  findings.json: %v\n", err)
 	}
 
 	title := fmt.Sprintf("aoc A/B %s: %s vs %s", experiment, cfg.A.Name, cfg.B.Name)
@@ -450,6 +452,8 @@ func runAB(args []string) int {
 	}
 	if b, err := json.MarshalIndent(sum, "", "  "); err == nil {
 		os.WriteFile(filepath.Join(root, "ab.json"), b, 0o644)
+	} else {
+		fmt.Fprintf(os.Stderr, "  ab.json: %v\n", err)
 	}
 
 	fmt.Printf("\naoc ab %s — %s vs %s\n\n", experiment, report.AgentLabel(cols[0].Runs[0]), report.AgentLabel(cols[1].Runs[0]))
