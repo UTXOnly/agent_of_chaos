@@ -1381,8 +1381,9 @@ type Mover struct {
 }
 
 // Movers are the functions worth a focused comparison: the located code
-// rows first, else the largest increase of every view the profiler has,
-// at most four, one per function.
+// rows first, else the largest increase of every view the profiler has
+// when it is at least 2 % of that view (the Code section's floor), at
+// most four, one per function.
 func Movers(res *Result) []Mover {
 	var out []Mover
 	seen := map[string]bool{}
@@ -1400,9 +1401,12 @@ func Movers(res *Result) []Mover {
 	}
 	if len(out) == 0 {
 		for _, d := range res.Profiles {
+			floor := 0.02 * math.Max(d.ATotal, d.BTotal)
 			for _, r := range d.Rows {
 				if r.Delta > 0 {
-					add(r.Function, d.Label, prof.FormatDelta(r.Delta, d.Unit))
+					if r.Delta >= floor {
+						add(r.Function, d.Label, prof.FormatDelta(r.Delta, d.Unit))
+					}
 					break
 				}
 			}
