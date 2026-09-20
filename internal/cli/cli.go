@@ -36,6 +36,7 @@ func register(c command) { commands = append(commands, c) }
 // Main dispatches a subcommand and returns the exit code.
 func Main(args []string, version string) int {
 	buildVersion = version
+	loadDotEnv(".env")
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		usage(os.Stdout)
 		return 0
@@ -62,7 +63,7 @@ Usage:
 
 Commands:
 `)
-	order := []string{"ab", "run", "generate", "intake", "report", "compare", "notebook", "ship", "scenarios", "profiles", "version"}
+	order := []string{"ab", "conclude", "run", "generate", "intake", "report", "compare", "notebook", "ship", "scenarios", "profiles", "version"}
 	byName := map[string]command{}
 	for _, c := range commands {
 		byName[c.name] = c
@@ -75,12 +76,15 @@ Commands:
 	fmt.Fprintf(w, "  %-11s %s\n", "version", "print the build version")
 	fmt.Fprintf(w, `
 Every flag can also be set with an environment variable: AOC_<FLAG> with
-dashes as underscores (--log-dir → AOC_LOG_DIR). Flags win over env.
+dashes as underscores (--log-dir → AOC_LOG_DIR). Flags win over env. A .env
+in the working directory is read first (like docker compose), so DD_API_KEY,
+DD_APP_KEY and DD_SUBDOMAIN there also serve the CLI's own Datadog calls.
 
-Quick start (Docker; DD_API_KEY in .env so metrics land in Datadog):
+Quick start (Docker; DD_API_KEY in .env so metrics and profiles land in Datadog):
   aoc ab                               # A/B the latest release vs the dev image in aoc.yaml
+  cat results/<name>/findings.md       # what regressed, and the evidence (profiles, processes, telemetry)
+  aoc conclude --results results/<name> "what it turned out to be"
   aoc run --profile profiles/baseline.yaml --name baseline   # one measured run
-  aoc notebook --results results/baseline                    # → Datadog notebook (needs DD_APP_KEY)
 `)
 }
 

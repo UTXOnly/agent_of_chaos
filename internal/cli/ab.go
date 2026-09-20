@@ -16,8 +16,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
+	"github.com/UTXOnly/agent_of_chaos/internal/findings"
 	"github.com/UTXOnly/agent_of_chaos/internal/gen"
 	"github.com/UTXOnly/agent_of_chaos/internal/notebook"
+	"github.com/UTXOnly/agent_of_chaos/internal/prof"
 	"github.com/UTXOnly/agent_of_chaos/internal/report"
 )
 
@@ -28,19 +30,20 @@ func init() {
 // ABConfig is aoc.yaml: two agents, one workload, where the results go. The
 // shipped aoc.yaml documents every field.
 type ABConfig struct {
-	Name     string            `yaml:"name"`
-	Profile  ProfileRef        `yaml:"profile"`
-	Duration gen.Duration      `yaml:"duration"`
-	Warmup   gen.Duration      `yaml:"warmup"`
-	Drain    gen.Duration      `yaml:"drain"`
-	Runs     int               `yaml:"runs"`
-	Pause    gen.Duration      `yaml:"pause"`
-	A        Variant           `yaml:"a"`
-	B        Variant           `yaml:"b"`
-	Env      map[string]string `yaml:"env"`
-	Results  string            `yaml:"results"`
-	Notebook *bool             `yaml:"notebook"`
-	Compose  []string          `yaml:"compose"`
+	Name      string            `yaml:"name"`
+	Profile   ProfileRef        `yaml:"profile"`
+	Duration  gen.Duration      `yaml:"duration"`
+	Warmup    gen.Duration      `yaml:"warmup"`
+	Drain     gen.Duration      `yaml:"drain"`
+	Runs      int               `yaml:"runs"`
+	Pause     gen.Duration      `yaml:"pause"`
+	A         Variant           `yaml:"a"`
+	B         Variant           `yaml:"b"`
+	Env       map[string]string `yaml:"env"`
+	Results   string            `yaml:"results"`
+	Notebook  *bool             `yaml:"notebook"`
+	Compose   []string          `yaml:"compose"`
+	Threshold float64           `yaml:"threshold"` // percent; a headline change below it is noise
 }
 
 // Variant is one side of the test: an image and what applies to it only.
@@ -105,6 +108,9 @@ func loadABConfig(path string) (*ABConfig, []byte, error) {
 	}
 	if c.Results == "" {
 		c.Results = "results"
+	}
+	if c.Threshold <= 0 {
+		c.Threshold = 10
 	}
 	if c.A.Name == "" {
 		c.A.Name = "a"
@@ -207,14 +213,18 @@ func (c *ABConfig) plan(experiment string) []abRun {
 
 // abSummary is ab.json: the identities behind the comparison, for tooling.
 type abSummary struct {
-	Experiment string          `json:"experiment"`
-	Config     string          `json:"config"`
-	Profile    string          `json:"profile"`
-	Started    time.Time       `json:"started"`
-	Finished   time.Time       `json:"finished"`
-	Sides      []abSide        `json:"sides"`
-	Headline   []abHeadlineRow `json:"headline"`
-	Notebook   string          `json:"notebook,omitempty"`
+	Experiment string             `json:"experiment"`
+	Config     string             `json:"config"`
+	Profile    string             `json:"profile"`
+	Started    time.Time          `json:"started"`
+	Finished   time.Time          `json:"finished"`
+	Sides      []abSide           `json:"sides"`
+	Threshold  float64            `json:"threshold_pct"`
+	Summary    string             `json:"summary"` // "2 regression(s) in memory, cpu; 3 improvement(s)"
+	Findings   []findings.Finding `json:"findings"`
+	Headline   []abHeadlineRow    `json:"headline"`
+	Notebook   string             `json:"notebook,omitempty"`
+	Files      map[string]string  `json:"files"`
 }
 
 type abSide struct {
@@ -257,6 +267,7 @@ func runAB(args []string) int {
 	name := fs.Str("name", "", "experiment name (overrides the config's `name`)")
 	duration := fs.Duration("duration", 0, "override the measured window for both sides")
 	runs := fs.Int("runs", 0, "override `runs`: rounds per side, alternating a, b, a, b, …")
+	threshold := fs.Float("threshold", 0, "override `threshold`: percent change on a headline metric that counts as a finding")
 	only := fs.Str("only", "", "run only this side (a, b, or a side's name); the other side's existing results are reused")
 	plan := fs.Bool("plan", false, "print the resolved plan and exit without running anything")
 	compareOnly := fs.Bool("compare-only", false, "skip the runs; rebuild compare.md, ab.json and the notebook from the results on disk")
@@ -265,6 +276,7 @@ func runAB(args []string) int {
 	intake := fs.Str("intake", "http://localhost:8282", "how this machine reaches the intake")
 	noBuild := fs.Bool("no-build", false, "do not rebuild the aoc image before the first run")
 	mkNotebook := fs.Bool("notebook", os.Getenv("DD_APP_KEY") != "", "create the A/B notebook in Datadog (default: the config's `notebook`, else when DD_APP_KEY is set; notebook.json is always written)")
+	postEvent := fs.Bool("event", false, "with --compare-only: post the finished event again (it is posted after every run by default)")
 	ddSite := fs.Str("dd-site", envOr("DD_SITE", "datadoghq.com"), "Datadog site (env DD_SITE)")
 	if !fs.parse(args) {
 		return 2
@@ -278,6 +290,9 @@ func runAB(args []string) int {
 	}
 	if *duration > 0 {
 		cfg.Duration = gen.Duration(*duration)
+	}
+	if *threshold > 0 {
+		cfg.Threshold = *threshold
 	}
 	if cfg.Notebook != nil && !flagGiven(fs, "notebook") {
 		*mkNotebook = *cfg.Notebook
@@ -383,14 +398,30 @@ func runAB(args []string) int {
 	}
 	compareMD := report.CompareColumns(cols)
 	os.WriteFile(filepath.Join(root, "compare.md"), []byte(compareMD), 0o644)
+
+	// The brief: what moved, and the evidence — per-process memory, the
+	// profiles diffed by function, telemetry, the agent's log.
+	in := findings.Input{Experiment: experiment, Cols: cols, Captures: abCaptures(cols, all), Threshold: cfg.Threshold, AppURL: ddapi.AppURLFromEnv(), ResultsDir: root}
+	res := findings.Build(in)
+	findingsMD := findings.Markdown(res, in)
+	os.WriteFile(filepath.Join(root, "findings.md"), []byte(findingsMD), 0o644)
+	if b, err := json.MarshalIndent(res, "", "  "); err == nil {
+		os.WriteFile(filepath.Join(root, "findings.json"), b, 0o644)
+	}
+
 	title := fmt.Sprintf("aoc A/B %s: %s vs %s", experiment, cfg.A.Name, cfg.B.Name)
-	opts := notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv(), Experiment: experiment}
+	opts := notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv(), Experiment: experiment, Findings: res}
 	nb := notebook.ForAB(title, cols, opts)
 	nbFile := filepath.Join(root, "notebook.json")
 	nbURL, nbErr := createNotebook(context.Background(), nb, nbFile, ddapi.FromEnv(), !*mkNotebook)
 
-	headline := report.Headline(cols)
-	sum := abSummary{Experiment: experiment, Config: *config, Profile: cfg.Profile.String(), Started: started, Finished: time.Now(), Notebook: nbURL}
+	headline := res.Headline
+	sum := abSummary{Experiment: experiment, Config: *config, Profile: cfg.Profile.String(), Started: started, Finished: time.Now(), Notebook: nbURL,
+		Threshold: cfg.Threshold, Summary: res.Summary, Findings: res.Findings,
+		Files: map[string]string{"findings": filepath.Join(root, "findings.md"), "findings_json": filepath.Join(root, "findings.json"), "compare": filepath.Join(root, "compare.md"), "notebook": nbFile}}
+	if res.Findings == nil {
+		sum.Findings = []findings.Finding{}
+	}
 	for i, c := range cols {
 		side := abSide{Side: []string{"a", "b"}[i], Name: c.Name, Image: c.Runs[0].Agent.Image, Digest: c.Runs[0].Agent.Digest, Version: topKey(c.Runs[0].Agent.Versions)}
 		for _, r := range c.Runs {
@@ -412,8 +443,13 @@ func runAB(args []string) int {
 	}
 
 	fmt.Printf("\naoc ab %s — %s vs %s\n\n", experiment, report.AgentLabel(cols[0].Runs[0]), report.AgentLabel(cols[1].Runs[0]))
+	for _, v := range res.Verdict {
+		fmt.Printf("  %s\n", v)
+	}
+	fmt.Println()
 	printHeadline(cols, headline)
-	fmt.Printf("\n  results: %s/ (compare.md, ab.json, notebook.json, <side>/report.md …)\n", root)
+	fmt.Printf("\n  findings: %s   (evidence per regression; compare.md has every metric)\n", filepath.Join(root, "findings.md"))
+	fmt.Printf("  results:  %s/ (ab.json, notebook.json, <side>/report.md, <side>/profiles/ …)\n", root)
 	switch {
 	case nbErr != nil:
 		fmt.Printf("  notebook: %v\n", nbErr)
@@ -424,8 +460,11 @@ func runAB(args []string) int {
 	default:
 		fmt.Printf("  notebook: wrote %s (not created: notebook: false)\n", nbFile)
 	}
-	if len(todo) > 0 {
-		postABEvent(experiment, cols, headline, nbURL)
+	if len(todo) > 0 || *postEvent {
+		if !ddapi.FromEnv().Configured() {
+			fmt.Printf("  event: DD_API_KEY not set (env or .env) — the finished event was not posted\n")
+		}
+		postABEvent(experiment, cols, findings.EventText(res, in, nbURL))
 	}
 
 	bad := false
@@ -442,6 +481,27 @@ func runAB(args []string) int {
 	return 0
 }
 
+// abCaptures loads each side's profile captures (every run's, restricted
+// to its window) from the results directories.
+func abCaptures(cols []report.Column, all []abRun) [][]prof.Capture {
+	out := make([][]prof.Capture, len(cols))
+	for i, c := range cols {
+		for _, r := range c.Runs {
+			for _, pr := range all {
+				if pr.name != r.Name {
+					continue
+				}
+				caps, err := prof.LoadDir(pr.dir)
+				if err != nil {
+					continue
+				}
+				out[i] = append(out[i], prof.Overlapping(caps, r.WindowStart, r.WindowEnd)...)
+			}
+		}
+	}
+	return out
+}
+
 // abColumns loads the planned runs' reports from disk, one column per side.
 func abColumns(cfg *ABConfig, all []abRun) ([]report.Column, error) {
 	cols := []report.Column{{Name: cfg.A.Name}, {Name: cfg.B.Name}}
@@ -455,6 +515,13 @@ func abColumns(cfg *ABConfig, all []abRun) ([]report.Column, error) {
 			return nil, err
 		}
 		rep.Name = r.name
+		if len(rep.Profiles) == 0 {
+			// Reports written before the profiles were analysed (or by an
+			// older aoc) still have the pprof files next to them.
+			if caps, err := prof.LoadDir(r.dir); err == nil {
+				rep.Profiles = prof.Summaries(prof.Overlapping(caps, rep.WindowStart, rep.WindowEnd), 40)
+			}
+		}
 		i := 0
 		if r.side == "b" {
 			i = 1
@@ -503,24 +570,15 @@ func printHeadline(cols []report.Column, rows []report.HeadlineRow) {
 }
 
 // postABEvent leaves the verdict in Datadog as an event (source:aoc).
-func postABEvent(experiment string, cols []report.Column, rows []report.HeadlineRow, nbURL string) {
+func postABEvent(experiment string, cols []report.Column, text string) {
 	client := ddapi.FromEnv()
 	if !client.Configured() {
 		return
 	}
-	var text strings.Builder
-	fmt.Fprintf(&text, "%%%%%% \n**%s** %s vs **%s** %s\n\n| metric | %s | %s | Δ |\n|---|---|---|---|\n", cols[0].Name, report.AgentLabel(cols[0].Runs[0]), cols[1].Name, report.AgentLabel(cols[1].Runs[0]), cols[0].Name, cols[1].Name)
-	for _, r := range rows {
-		fmt.Fprintf(&text, "| %s | %s | %s | %s |\n", r.Metric, r.Cells[0], r.Cells[1], strings.Join(r.Deltas, " · "))
-	}
-	if nbURL != "" {
-		fmt.Fprintf(&text, "\n[notebook](%s)\n", nbURL)
-	}
-	text.WriteString("\n%%%")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err := client.PostEvent(ctx, ddapi.Event{
-		Title: fmt.Sprintf("aoc: A/B %s finished — %s vs %s", experiment, cols[0].Name, cols[1].Name), Text: text.String(),
+		Title: fmt.Sprintf("aoc: A/B %s finished — %s vs %s", experiment, cols[0].Name, cols[1].Name), Text: text,
 		Tags: []string{"source:aoc", "harness:aoc", "experiment:" + experiment}, AlertType: "info", SourceTypeName: "aoc", DateHappened: time.Now().Unix(),
 	})
 	if err != nil {

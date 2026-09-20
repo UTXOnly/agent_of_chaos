@@ -339,6 +339,14 @@ func (e *emitter) build(now time.Time, cur, prev emitCounters, dt float64) []dda
 			b.gauge("agent.container.cpu_percent", o.CPUPercent)
 			b.gauge("agent.container.memory_bytes", float64(o.MemBytes))
 			b.gauge("agent.container.pids", float64(o.PIDs))
+			if o.MemAnon >= 0 {
+				b.gauge("agent.container.memory_anon_bytes", float64(o.MemAnon))
+				b.gauge("agent.container.memory_file_bytes", float64(o.MemFile))
+			}
+			for name, ps := range s.agent.currentProcs(now) {
+				b.gauge("agent.proc.rss_bytes", float64(ps.RSS), "proc:"+name)
+				b.gauge("agent.proc.cpu_percent", ps.CPUPct, "proc:"+name)
+			}
 		}
 		if o.TelemetryOK {
 			b.gauge("agent.process.cpu_percent", o.ProcCPUPercent)

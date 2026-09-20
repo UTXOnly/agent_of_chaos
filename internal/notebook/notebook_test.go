@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/UTXOnly/agent_of_chaos/internal/findings"
 	"github.com/UTXOnly/agent_of_chaos/internal/report"
 )
 
@@ -64,7 +65,8 @@ func TestForAB(t *testing.T) {
 	b.WindowStart, b.WindowEnd = a.WindowStart.Add(5*time.Minute), a.WindowEnd.Add(5*time.Minute)
 	cols := []report.Column{{Name: "release", Runs: []*report.Report{a}}, {Name: "candidate", Runs: []*report.Report{b}}}
 	nb := ForAB("aoc A/B exp", cols, Options{Experiment: "exp", AppURL: "https://x.datadoghq.com"})
-	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+1+len(runCharts)+1 {
+	// header, profiles, timeline, charts intro, the A/B charts, all metrics, dig deeper
+	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+1+1+1+len(abCharts)+1+1 {
 		t.Fatalf("name=%q cells=%d", nb.Name, len(nb.Cells))
 	}
 	// The window is the later run's, ±60 s.
@@ -77,8 +79,11 @@ func TestForAB(t *testing.T) {
 		`"alias": "release: generated"`,
 		`"query": "sum:aoc.gen.records_per_sec{run:exp-b}"`, // the anchor is not shifted
 		`"alias": "candidate: generated"`,
-		`timeshift(sum:aoc.intake.responses_per_sec{run:exp-a} by {run,status}, -300)`, // grouped: run joins the group-by
-		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,                     // the real-time timeline
+		`timeshift(avg:aoc.agent.telemetry.logs_component_utilization.ratio{run:exp-a} by {run,name}, -300)`, // grouped: run joins the group-by
+		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,                                           // the real-time timeline
+		`timeshift(avg:aoc.agent.proc.rss_bytes{run:exp-a} by {run,proc}, -300)`,                             // per-process memory, overlaid
+		"## All metrics",
+		"service%3Adatadog-agent+run%3Aexp-b",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("body missing %q", want)
@@ -97,5 +102,24 @@ func TestForAB(t *testing.T) {
 	var parsed map[string]any
 	if err := json.Unmarshal(nb.Body(), &parsed); err != nil {
 		t.Fatal(err)
+	}
+
+	// With findings, the regressions get their own cells right after the header.
+	b.Resources.ContainerMemMax, a.Resources.ContainerMemMax = 600e6, 200e6
+	b.Resources.ContainerAnonMax, a.Resources.ContainerAnonMax = 580e6, 180e6
+	res := findings.Build(findings.Input{Experiment: "exp", Cols: cols, Threshold: 10})
+	nb = ForAB("aoc A/B exp", cols, Options{Experiment: "exp", Findings: res})
+	if len(nb.Cells) != 1+1+1+1+1+len(abCharts)+1+1 {
+		t.Fatalf("cells with one regression topic = %d", len(nb.Cells))
+	}
+	s = string(nb.Body())
+	for _, want := range []string{"## Verdict (threshold ±10%)", "## Regression — memory", "Where the memory is", "agent container mem max 200.0 MB → 600.0 MB"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("findings notebook missing %q", want)
+		}
+	}
+	first, _ := json.Marshal(nb.Cells[1])
+	if !strings.Contains(string(first), "## Regression") {
+		t.Error("the regression cell should come right after the header")
 	}
 }

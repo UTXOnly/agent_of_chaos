@@ -47,9 +47,15 @@ var compareMetrics = []metric{
 	{"agent container CPU max", func(r *Report) float64 { return r.Resources.ContainerCPUMax }, func(v float64) string { return fmt.Sprintf("%.1f%%", v) }, lower},
 	{"agent container mem avg", func(r *Report) float64 { return float64(r.Resources.ContainerMemAvg) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
 	{"agent container mem max", func(r *Report) float64 { return float64(r.Resources.ContainerMemMax) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
+	{"agent container anon mem max", func(r *Report) float64 { return float64(r.Resources.ContainerAnonMax) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
+	{"agent container file cache max", func(r *Report) float64 { return float64(r.Resources.ContainerFileMax) }, func(v float64) string { return fmtutil.BytesF(v) }, neutral},
 	{"core agent process CPU avg", func(r *Report) float64 { return r.Resources.ProcessCPUAvg }, func(v float64) string { return fmt.Sprintf("%.1f%%", v) }, lower},
 	{"core agent RSS max", func(r *Report) float64 { return float64(r.Resources.ProcessRSSMax) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
+	{"core agent Go heap in use", func(r *Report) float64 { return Tele(r, "go_memstats_heap_inuse_bytes", "") }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
+	{"core agent goroutines", func(r *Report) float64 { return Tele(r, "go_goroutines", "") }, func(v float64) string { return fmtutil.Float(v, 0) }, lower},
 	{"CPU seconds per 1M logs", func(r *Report) float64 { return r.Resources.CPUSecondsPerMLogs }, func(v float64) string { return fmt.Sprintf("%.2f", v) }, lower},
+	{"agent log errors", func(r *Report) float64 { return float64(logCount(r).Errors) }, func(v float64) string { return fmtutil.Int(int64(v)) }, lower},
+	{"agent log warnings", func(r *Report) float64 { return float64(logCount(r).Warnings) }, func(v float64) string { return fmtutil.Int(int64(v)) }, lower},
 	{"tags per log", func(r *Report) float64 { return r.Tags.AvgTagsPerLog }, func(v float64) string { return fmt.Sprintf("%.2f", v) }, lower},
 	{"tag bytes per log", func(r *Report) float64 { return r.Tags.AvgTagBytesPerLog }, func(v float64) string { return fmt.Sprintf("%.1f B", v) }, lower},
 	{"logs per payload p50", func(r *Report) float64 { return r.HTTP.LogsPerPayload.P50 }, func(v float64) string { return fmt.Sprintf("%.0f", v) }, neutral},
@@ -59,10 +65,42 @@ var compareMetrics = []metric{
 
 // headlineMetrics are the rows of the short verdict (aoc ab).
 var headlineMetrics = []string{
-	"delivery ratio", "lost / missing", "duplicates", "orphan continuation lines",
+	"delivery ratio", "lost / missing", "duplicates", "out of order", "orphan continuation lines",
 	"e2e latency p50", "e2e latency p99", "received wire B/s", "compression ratio",
-	"agent container CPU avg", "agent container mem max", "core agent process CPU avg",
-	"CPU seconds per 1M logs", "tags per log", "tag bytes per log",
+	"agent container CPU avg", "core agent process CPU avg", "CPU seconds per 1M logs",
+	"agent container mem max", "agent container anon mem max", "core agent RSS max", "core agent Go heap in use", "core agent goroutines",
+	"tags per log", "tag bytes per log", "agent log errors", "agent log warnings",
+}
+
+// HeadlineMetrics lists the verdict rows, in order.
+func HeadlineMetrics() []string { return append([]string(nil), headlineMetrics...) }
+
+// Tele is the last value of an agent telemetry series (name, and a
+// substring of its labels; "" matches the unlabelled series). 0 when absent.
+func Tele(r *Report, name, labels string) float64 {
+	for _, t := range r.Telemetry {
+		if t.Name == name && (labels == "" && t.Labels == "" || labels != "" && strings.Contains(t.Labels, labels)) {
+			return t.Last
+		}
+	}
+	return 0
+}
+
+// TeleDelta is a counter's change over the window.
+func TeleDelta(r *Report, name, labels string) float64 {
+	for _, t := range r.Telemetry {
+		if t.Name == name && (labels == "" && t.Labels == "" || labels != "" && strings.Contains(t.Labels, labels)) {
+			return t.Delta
+		}
+	}
+	return 0
+}
+
+func logCount(r *Report) LogSummary {
+	if r.AgentLog == nil {
+		return LogSummary{}
+	}
+	return *r.AgentLog
 }
 
 // Column is one side of a comparison: a label and the runs behind it. A
@@ -82,16 +120,17 @@ func Columns(reports []*Report) []Column {
 	return cols
 }
 
-// value is the column's (median) value of a metric.
-func (c Column) value(get func(*Report) float64) float64 {
+// Value is the column's (median over its runs) value of a metric.
+func (c Column) Value(get func(*Report) float64) float64 {
 	vals := make([]float64, 0, len(c.Runs))
 	for _, r := range c.Runs {
 		vals = append(vals, get(r))
 	}
-	return median(vals)
+	return Median(vals)
 }
 
-func median(vals []float64) float64 {
+// Median of a slice (sorted in place); 0 when empty.
+func Median(vals []float64) float64 {
 	switch len(vals) {
 	case 0:
 		return 0
@@ -150,7 +189,7 @@ func CompareColumns(cols []Column) string {
 	multi := false
 	for i, c := range cols {
 		agents[i] = AgentLabel(c.Runs[0])
-		win[i] = secs(c.value(func(r *Report) float64 { return r.Seconds }))
+		win[i] = secs(c.Value(func(r *Report) float64 { return r.Seconds }))
 		runs[i] = fmt.Sprintf("%d", len(c.Runs))
 		if len(c.Runs) > 1 {
 			multi = true
@@ -167,7 +206,7 @@ func CompareColumns(cols []Column) string {
 		vals := make([]float64, len(cols))
 		cells := make([]string, len(cols))
 		for i, c := range cols {
-			vals[i] = c.value(m.get)
+			vals[i] = c.Value(m.get)
 			cells[i] = m.render(vals[i])
 		}
 		var deltas []string
@@ -175,6 +214,13 @@ func CompareColumns(cols []Column) string {
 			deltas = append(deltas, delta(vals[0], vals[i], m.sense))
 		}
 		p("| %s | %s | %s |\n", m.name, strings.Join(cells, " | "), strings.Join(deltas, " · "))
+	}
+
+	if t := ProcessTable(cols); t != "" {
+		p("\n## Agent processes (docker top; RSS max and CPU avg, medians over runs)\n\n%s", t)
+	}
+	if t := ProfileTable(cols); t != "" {
+		p("\n## Agent profiles (continuous profiler, merged over the window)\n\n%s", t)
 	}
 
 	// Telemetry counters present in the baseline and at least one other.
@@ -207,7 +253,7 @@ func CompareColumns(cols []Column) string {
 					}
 				}
 				if len(vals) > 0 {
-					v := median(vals)
+					v := Median(vals)
 					cells[i] = fmtutil.Float(v, 0)
 					if v != 0 {
 						any = true
@@ -228,34 +274,219 @@ func CompareColumns(cols []Column) string {
 }
 
 // HeadlineRow is one line of the short verdict: a metric, one cell per
-// column, and each non-baseline column's delta against the first.
+// column, and each non-baseline column's delta against the first. Values
+// and Pct carry the numbers behind the rendered cells; Pct is NaN when a
+// percentage makes no sense (baseline 0). Sense is "higher", "lower" or
+// "neutral": which direction is an improvement.
 type HeadlineRow struct {
 	Metric string
 	Cells  []string
 	Deltas []string
+	Values []float64
+	Pct    []float64
+	Sense  string
 }
 
 // Headline is the handful of rows that answer "which agent is better".
 func Headline(cols []Column) []HeadlineRow {
+	return Rows(cols, headlineMetrics)
+}
+
+// AllRows is Headline over every comparison metric.
+func AllRows(cols []Column) []HeadlineRow {
+	names := make([]string, len(compareMetrics))
+	for i, m := range compareMetrics {
+		names[i] = m.name
+	}
+	return Rows(cols, names)
+}
+
+// Rows builds the named rows.
+func Rows(cols []Column, names []string) []HeadlineRow {
 	var rows []HeadlineRow
-	for _, name := range headlineMetrics {
+	for _, name := range names {
 		for _, m := range compareMetrics {
 			if m.name != name {
 				continue
 			}
-			row := HeadlineRow{Metric: m.name}
+			row := HeadlineRow{Metric: m.name, Sense: [...]string{"higher", "lower", "neutral"}[m.sense]}
 			vals := make([]float64, len(cols))
 			for i, c := range cols {
-				vals[i] = c.value(m.get)
+				vals[i] = c.Value(m.get)
 				row.Cells = append(row.Cells, m.render(vals[i]))
 			}
+			row.Values = vals
 			for i := 1; i < len(cols); i++ {
 				row.Deltas = append(row.Deltas, delta(vals[0], vals[i], m.sense))
+				row.Pct = append(row.Pct, pctDelta(vals[0], vals[i]))
 			}
 			rows = append(rows, row)
 		}
 	}
 	return rows
+}
+
+// Render formats a value the way the metric's row does.
+func Render(metric string, v float64) string {
+	for _, m := range compareMetrics {
+		if m.name == metric {
+			return m.render(v)
+		}
+	}
+	return fmtutil.Float(v, 2)
+}
+
+func pctDelta(a, b float64) float64 {
+	if a == 0 {
+		return math.NaN()
+	}
+	return (b - a) / math.Abs(a) * 100
+}
+
+// ProcessTable is the per-process RSS/CPU of every column side by side.
+func ProcessTable(cols []Column) string {
+	names := map[string]bool{}
+	var order []string
+	for _, c := range cols {
+		for _, r := range c.Runs {
+			for _, ps := range r.Resources.Processes {
+				if !names[ps.Name] {
+					names[ps.Name] = true
+					order = append(order, ps.Name)
+				}
+			}
+		}
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	procVal := func(c Column, name string, get func(ProcessStat) float64) (float64, bool) {
+		var vals []float64
+		for _, r := range c.Runs {
+			for _, ps := range r.Resources.Processes {
+				if ps.Name == name {
+					vals = append(vals, get(ps))
+				}
+			}
+		}
+		if len(vals) == 0 {
+			return 0, false
+		}
+		return Median(vals), true
+	}
+	// Largest RSS in the baseline first.
+	sort.SliceStable(order, func(i, j int) bool {
+		a, _ := procVal(cols[0], order[i], func(p ProcessStat) float64 { return float64(p.RSSMax) })
+		b, _ := procVal(cols[0], order[j], func(p ProcessStat) float64 { return float64(p.RSSMax) })
+		return a > b
+	})
+	var b strings.Builder
+	hdr := []string{}
+	for _, c := range cols {
+		hdr = append(hdr, c.Name+" RSS max", c.Name+" CPU avg")
+	}
+	fmt.Fprintf(&b, "| process | %s | Δ RSS |\n|---|%s---|\n", strings.Join(hdr, " | "), strings.Repeat("---|", len(hdr)))
+	for _, name := range order {
+		cells := []string{}
+		var rss []float64
+		for _, c := range cols {
+			r, ok := procVal(c, name, func(p ProcessStat) float64 { return float64(p.RSSMax) })
+			cpu, _ := procVal(c, name, func(p ProcessStat) float64 { return p.CPUAvg })
+			if !ok {
+				cells = append(cells, "–", "–")
+				rss = append(rss, math.NaN())
+				continue
+			}
+			cells = append(cells, fmtutil.BytesF(r), fmt.Sprintf("%.1f%%", cpu))
+			rss = append(rss, r)
+		}
+		var deltas []string
+		for i := 1; i < len(cols); i++ {
+			switch {
+			case math.IsNaN(rss[0]) && math.IsNaN(rss[i]):
+				deltas = append(deltas, "=")
+			case math.IsNaN(rss[0]):
+				deltas = append(deltas, "+"+fmtutil.BytesF(rss[i])+" (new)")
+			case math.IsNaN(rss[i]):
+				deltas = append(deltas, "gone")
+			default:
+				deltas = append(deltas, delta(rss[0], rss[i], lower))
+			}
+		}
+		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", name, strings.Join(cells, " | "), strings.Join(deltas, " · "))
+	}
+	return b.String()
+}
+
+// ProfileTable lists each column's profile totals (CPU %, heap in use, …)
+// per service and view. The per-function diff lives in findings.
+func ProfileTable(cols []Column) string {
+	type key struct{ service, label string }
+	seen := map[key]bool{}
+	var order []key
+	units := map[key]string{}
+	for _, c := range cols {
+		for _, r := range c.Runs {
+			for _, ps := range r.Profiles {
+				k := key{ps.Service, ps.Label}
+				if !seen[k] {
+					seen[k] = true
+					order = append(order, k)
+					units[k] = ps.Unit
+				}
+			}
+		}
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "| service · view | %s | Δ |\n|---|%s---|\n", strings.Join(colNames(cols), " | "), strings.Repeat("---|", len(cols)))
+	for _, k := range order {
+		vals := make([]float64, len(cols))
+		cells := make([]string, len(cols))
+		for i, c := range cols {
+			var vs []float64
+			caps := 0
+			for _, r := range c.Runs {
+				for _, ps := range r.Profiles {
+					if ps.Service == k.service && ps.Label == k.label {
+						vs = append(vs, ps.Total)
+						caps += ps.Captures
+					}
+				}
+			}
+			if len(vs) == 0 {
+				cells[i] = "–"
+				vals[i] = math.NaN()
+				continue
+			}
+			vals[i] = Median(vs)
+			cells[i] = fmt.Sprintf("%s (%d captures)", formatUnit(vals[i], units[k]), caps)
+		}
+		var deltas []string
+		for i := 1; i < len(cols); i++ {
+			if math.IsNaN(vals[0]) || math.IsNaN(vals[i]) {
+				deltas = append(deltas, "n/a")
+			} else {
+				deltas = append(deltas, delta(vals[0], vals[i], lower))
+			}
+		}
+		fmt.Fprintf(&b, "| `%s` · %s | %s | %s |\n", k.service, k.label, strings.Join(cells, " | "), strings.Join(deltas, " · "))
+	}
+	return b.String()
+}
+
+func formatUnit(v float64, unit string) string {
+	switch unit {
+	case "%":
+		return fmt.Sprintf("%.1f%%", v)
+	case "B":
+		return fmtutil.BytesF(v)
+	case "B/s":
+		return fmtutil.BytesF(v) + "/s"
+	}
+	return fmtutil.Float(v, 1)
 }
 
 func colNames(cols []Column) []string {

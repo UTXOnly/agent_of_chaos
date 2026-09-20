@@ -33,8 +33,8 @@ func TestLoadABConfigDefaults(t *testing.T) {
 	if c.B.Name != "b" || c.B.Pull != "never" {
 		t.Errorf("b: %+v", c.B)
 	}
-	if c.Runs != 1 || c.Pause.D() != 10*time.Second || c.Results != "results" {
-		t.Errorf("defaults: runs=%d pause=%s results=%s", c.Runs, c.Pause, c.Results)
+	if c.Runs != 1 || c.Pause.D() != 10*time.Second || c.Results != "results" || c.Threshold != 10 {
+		t.Errorf("defaults: runs=%d pause=%s results=%s threshold=%v", c.Runs, c.Pause, c.Results, c.Threshold)
 	}
 	p, psrc, err := c.workload()
 	if err != nil {

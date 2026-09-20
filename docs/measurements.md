@@ -62,6 +62,20 @@ decompression; message bytes (just the log text) are in the streams table.
   once per second (CPU = Δcontainer / Δsystem × online CPUs; memory = usage −
   inactive file cache). Covers every process in the container (core agent,
   trace-agent, process-agent, security-agent…).
+* **container anon / file**: the cgroup's split of that memory (`anon` and
+  `file` on cgroup v2, `rss`/`cache` on v1). *anon* is the processes' own
+  pages — the number that grows when something leaks; *file* is page cache
+  charged to the container (files the agent read first, e.g. Python
+  integrations), which the kernel reclaims under pressure. A container
+  memory increase that is all *file* is not a leak.
+* **processes** (`docker top` every 5 s, summed by command name): RSS
+  avg/max and CPU avg/max per process (`agent`, `trace-agent`,
+  `process-agent`, `system-probe`, `python3`…). This is what attributes a
+  container-level change to a process. ps reports CPU time in whole
+  seconds, so the per-interval percentage (the `aoc.agent.proc.cpu_percent`
+  gauge, and *max*) is coarse; the window *avg* is Δcputime over the whole
+  window and is exact to a second. RSS double-counts shared pages between
+  processes, so the sum can exceed *anon*.
 * **core agent process**: `process_cpu_seconds_total` (rate → %) and
   `process_resident_memory_bytes` from the agent's `/telemetry` endpoint. The
   logs pipeline lives in this process.
@@ -69,6 +83,48 @@ decompression; message bytes (just the log text) are in the streams table.
   (logs received / 1e6). The single best cost number to compare builds with.
 * generators' and the intake's own CPU are reported so you can tell when the
   machine, not the agent, is the limit.
+
+## Agent profiles
+
+The agent's continuous-profiler uploads (one per `DD_INTERNAL_PROFILING_PERIOD`,
+60 s in compose) are kept by the intake and, after the run, the ones that
+overlap the window are merged and reduced by function (`report.json`
+`profiles[]`, `<results>/profiles/` for the pprof files):
+
+| view | file · sample type | value |
+|---|---|---|
+| **CPU** | `cpu.pprof` · `cpu` | nanoseconds of CPU per second of profile, as % of one core; flat = leaf frame, cum = anywhere on the stack |
+| **heap in use** | `delta-heap.pprof` · `inuse_space` | bytes live at the end of each period, averaged over the periods |
+| **allocation rate** | `delta-heap.pprof` · `alloc_space` | bytes allocated per wall-clock second |
+| goroutines, blocking, mutex wait | when the agent is configured to upload them | count (avg); goroutine-seconds per second |
+
+Where it misleads: the profiler samples the core agent only (the other
+agents need their own `*_INTERNAL_PROFILING_ENABLED`); a window shorter
+than a period yields nothing; the period in progress when the agent stops
+is lost; inlined frames are attributed to the innermost function; merging
+across periods averages out short spikes (the notebook's charts show them).
+`aoc ab` diffs the two sides' tables function by function (largest movers
+first); a function present on one side only shows `0` on the other.
+
+## Agent log
+
+`agent.log` (the container's last 20 000 lines) is counted by level and the
+most repeated `WARN`/`ERROR` messages are kept with their numbers replaced
+by `#` (`report.json` `agent_log`). `truncated` means the capture hit the
+line limit, so counts are a lower bound.
+
+## Findings (`aoc ab`)
+
+`findings.md` classifies every headline row of the comparison: a change of
+at least `threshold` percent (aoc.yaml, default 10) in the worse direction
+is a *regression*, in the better direction an *improvement*; lost,
+duplicated, reordered and orphaned records are always findings (both sides
+non-zero and similar → *present on both sides*). Each regression topic
+(memory, cpu, latency, delivery, stability, bytes, tags) gets the tables
+that explain it, and "Next" lines with the exact Datadog MCP calls (filters,
+windows) for the level below. The threshold is not a statistical test: a
+single run on a laptop moves resource numbers by a few percent on its own;
+`runs: 2` or more takes medians.
 
 ## Agent telemetry
 

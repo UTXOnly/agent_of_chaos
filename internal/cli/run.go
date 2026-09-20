@@ -20,6 +20,7 @@ import (
 	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
 	"github.com/UTXOnly/agent_of_chaos/internal/gen"
 	"github.com/UTXOnly/agent_of_chaos/internal/notebook"
+	"github.com/UTXOnly/agent_of_chaos/internal/prof"
 	"github.com/UTXOnly/agent_of_chaos/internal/report"
 )
 
@@ -473,6 +474,28 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 	if hadFaults && r.Delivery.Missing > 0 {
 		r.Notes = append(r.Notes, fmt.Sprintf("%s records were still missing when the %s drain ended. Faults were injected during the window and the agent retries with exponential backoff (up to minutes), so these may still have been buffered in the agent rather than lost; use a longer `drain` to tell the two apart.", fmtInt(r.Delivery.Missing), p.Drain))
 	}
+	// The agent's own profiles: the intake kept a copy of every upload
+	// (and forwarded it to Datadog). The period that covers the end of the
+	// window is uploaded up to a period later, so give it a moment.
+	waitProfiles(ctx, s.intake, r.WindowEnd, 75*time.Second, logf)
+	caps, pst, perr := collectProfiles(s.intake, s.resultsDir, r.WindowStart, r.WindowEnd)
+	switch {
+	case perr != nil:
+		logf("profiles: %v", perr)
+	case len(caps) == 0 && pst.Received == 0:
+		logf("profiles: none uploaded (DD_INTERNAL_PROFILING_ENABLED and DD_APM_ENABLED must be true, and apm_config.profiling_dd_url must point at the intake)")
+	default:
+		r.Profiles = prof.Summaries(caps, 40)
+		note := ""
+		if pst.ForwardErrors > 0 {
+			note = fmt.Sprintf("; %d forward error(s), last: %s", pst.ForwardErrors, pst.LastError)
+		}
+		logf("profiles: %d upload(s) over the window saved under profiles/ (%d view(s))%s", len(caps), len(r.Profiles), note)
+	}
+	if outb, err := c.output(ctx, "logs", "--no-color", "--no-log-prefix", "--tail", "20000", "datadog-agent"); err == nil {
+		os.WriteFile(filepath.Join(s.resultsDir, "agent.log"), outb, 0o644)
+		r.AgentLog = summarizeAgentLog(outb, 20000)
+	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return nil, err
@@ -485,9 +508,6 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		os.WriteFile(filepath.Join(s.resultsDir, "agent-status.txt"), outb, 0o644)
 	} else {
 		logf("agent status unavailable: %v", err)
-	}
-	if outb, err := c.output(ctx, "logs", "--no-color", "--no-log-prefix", "--tail", "5000", "datadog-agent"); err == nil {
-		os.WriteFile(filepath.Join(s.resultsDir, "agent.log"), outb, 0o644)
 	}
 	if outb, err := c.output(ctx, "logs", "--no-color", "--tail", "2000", "intake"); err == nil {
 		os.WriteFile(filepath.Join(s.resultsDir, "intake.log"), outb, 0o644)

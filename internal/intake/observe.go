@@ -43,6 +43,11 @@ type agentObs struct {
 	memBytes        int64
 	memLimit        int64
 	pids            int64
+	memAnon         int64 // cgroup anon (v2) / rss (v1): the processes' own memory
+	memFile         int64 // cgroup file (v2) / cache (v1): page cache charged to the container
+	procs           map[string]procSample
+	procsAt         time.Time
+	procAcc         map[string]*procAcc
 
 	telemetryURL string
 	telemetryOK  bool
@@ -73,6 +78,7 @@ func newAgentObs(telemetryURL, dockerContainer, filter string) (*agentObs, error
 	return &agentObs{
 		telemetryURL: telemetryURL, dockerContainer: dockerContainer,
 		metrics: map[string]*MetricSeries{}, keep: re, types: map[string]string{},
+		procAcc: map[string]*procAcc{},
 	}, nil
 }
 
@@ -90,13 +96,26 @@ func (a *agentObs) current(at time.Time) (cpu float64, mem int64, procCPU float6
 	return
 }
 
-// rebase marks the current counter values as the run's starting point.
+// memBreakdown returns the latest cgroup anon/file split if fresh, else -1s.
+func (a *agentObs) memBreakdown(at time.Time) (anon, file int64) {
+	anon, file = -1, -1
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.dockerOK && at.Sub(a.dockerAt) < 3*time.Second {
+		anon, file = a.memAnon, a.memFile
+	}
+	return
+}
+
+// rebase marks the current counter values as the run's starting point and
+// restarts the per-process accumulators.
 func (a *agentObs) rebase() {
 	a.mu.Lock()
 	now := time.Now()
 	for _, m := range a.metrics {
 		m.First, m.FirstAt = m.Value, now
 	}
+	a.procAcc = map[string]*procAcc{}
 	a.mu.Unlock()
 }
 
@@ -108,6 +127,8 @@ type ObserverStatus struct {
 	DockerAt        time.Time `json:"docker_at,omitempty"`
 	CPUPercent      float64   `json:"cpu_percent"`
 	MemBytes        int64     `json:"mem_bytes"`
+	MemAnon         int64     `json:"mem_anon_bytes"`
+	MemFile         int64     `json:"mem_file_bytes"`
 	MemLimit        int64     `json:"mem_limit"`
 	PIDs            int64     `json:"pids"`
 	TelemetryURL    string    `json:"telemetry_url,omitempty"`
@@ -125,7 +146,7 @@ func (a *agentObs) status() ObserverStatus {
 	defer a.mu.Unlock()
 	return ObserverStatus{
 		DockerContainer: a.dockerContainer, DockerOK: a.dockerOK, DockerError: a.dockerErr, DockerAt: a.dockerAt,
-		CPUPercent: a.cpuPct, MemBytes: a.memBytes, MemLimit: a.memLimit, PIDs: a.pids,
+		CPUPercent: a.cpuPct, MemBytes: a.memBytes, MemAnon: a.memAnon, MemFile: a.memFile, MemLimit: a.memLimit, PIDs: a.pids,
 		TelemetryURL: a.telemetryURL, TelemetryOK: a.telemetryOK, TelemetryError: a.telemetryErr, TelemetryAt: a.telemetryAt,
 		Scrapes: a.scrapes, ProcCPUPercent: a.procCPUPct, ProcRSS: a.procRSS, Series: len(a.metrics),
 	}
@@ -314,14 +335,20 @@ type dockerStats struct {
 	} `json:"pids_stats"`
 }
 
-// runDocker streams /containers/{name}/stats and keeps the latest sample.
-func (a *agentObs) runDocker(ctx context.Context, socket string, logf func(string, ...any)) {
-	client := &http.Client{Transport: &http.Transport{
+// dockerClient talks to the Docker API over its unix socket.
+func dockerClient(socket string) *http.Client {
+	return &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
 		},
 	}}
+}
+
+// runDocker streams /containers/{name}/stats and keeps the latest sample.
+func (a *agentObs) runDocker(ctx context.Context, socket string, logf func(string, ...any)) {
+	client := dockerClient(socket)
+	go a.runTop(ctx, socket, logf)
 	backoff := time.Second
 	wasOK := false
 	for {
@@ -387,10 +414,17 @@ func (a *agentObs) streamDocker(ctx context.Context, client *http.Client, logf f
 		} else if v, ok := st.MemoryStats.Stats["total_inactive_file"]; ok && v < mem { // cgroup v1
 			mem -= v
 		}
+		anon, file := int64(-1), int64(-1)
+		if v, ok := st.MemoryStats.Stats["anon"]; ok { // cgroup v2
+			anon, file = int64(v), int64(st.MemoryStats.Stats["file"])
+		} else if v, ok := st.MemoryStats.Stats["total_rss"]; ok { // cgroup v1
+			anon, file = int64(v), int64(st.MemoryStats.Stats["total_cache"])
+		}
 		a.mu.Lock()
 		first := !a.dockerOK
 		a.dockerOK, a.dockerErr, a.dockerAt = true, "", time.Now()
 		a.cpuPct, a.memBytes, a.memLimit, a.pids = cpu, int64(mem), int64(st.MemoryStats.Limit), int64(st.PidsStats.Current)
+		a.memAnon, a.memFile = anon, file
 		a.mu.Unlock()
 		if first && !*wasOK {
 			logf("[observe] docker stats streaming for container %q", a.dockerContainer)

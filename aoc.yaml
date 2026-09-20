@@ -3,9 +3,12 @@
 # Two Datadog Agents get the same workload, one after the other, against the
 # same fake logs intake: side `a` is the control (the latest public release
 # by default), side `b` the candidate (a development build). The harness then
-# compares them: a Markdown table (compare.md), ab.json, a Datadog notebook
-# with both agents overlaid on every chart, and every aoc.* metric, event and
-# agent metric/profile tagged experiment:<name> variant:<side>.
+# writes an investigation brief, results/<name>/findings.md: which headline
+# metrics regressed, and the evidence that says why — memory by process and
+# by cgroup, the agent's own CPU/heap profiles diffed function by function,
+# its telemetry, its log — followed by the improvements and the full table.
+# The same brief leads the Datadog notebook, and every aoc.* metric, event
+# and agent metric/profile is tagged experiment:<name> variant:<side>.
 #
 # Like datadog.yaml, every setting is listed here with its default; uncomment
 # what you want to change.
@@ -14,7 +17,8 @@
 #   aoc ab --plan             # validate it and print what would run
 #   aoc ab --config x.yaml    # another test
 #   aoc ab --only b           # rebuilt the dev image? re-run b, reuse a's results
-#   aoc ab --compare-only     # re-render compare.md and the notebook from disk
+#   aoc ab --compare-only     # re-render findings.md, compare.md and the notebook from disk
+#   aoc conclude --results results/<name> "what it turned out to be"
 #
 # Unknown keys are errors, so typos surface before a run, not after it.
 
@@ -49,10 +53,23 @@ profile: profiles/baseline.yaml
 ## @param drain    - duration - optional - default: the profile's
 ## Override the profile's measured window, the settling time after the
 ## generators start, and the wait for the pipeline to flush after they stop.
+##
+## The agent profiles itself once a minute (DD_INTERNAL_PROFILING_PERIOD) and
+## the brief is built from the profiles that fall inside the window, so the
+## window should span several periods: 10 minutes gives nine or ten per
+## side, enough to average out GC and rotation noise. `aoc ab --duration 2m`
+## is a quick smoke of a config (one or two periods).
 #
-# duration: 3m
+duration: 10m
 # warmup: 20s
 # drain: 45s
+
+## @param threshold - number - optional - default: 10
+## Percent change on a headline metric (b vs a) that counts as a finding.
+## Below it a change is reported in the table but not investigated. Records
+## lost, duplicated or reordered are always findings.
+#
+# threshold: 10
 
 ## @param runs - integer - optional - default: 1
 ## Rounds per side. Rounds alternate — a, b, a, b, … — so whatever drifts on
@@ -128,15 +145,22 @@ b:
 ##################################
 
 ## @param results - string - optional - default: results
-## Results root. The test writes results/<name>/<side>[-<round>]/ per run
-## (report.md, report.json, timeseries.csv, agent.log, …) and, for the pair,
-## results/<name>/compare.md, ab.json, notebook.json and a copy of this file.
+## Results root. For the pair the test writes results/<name>/findings.md
+## (the brief: regressions, evidence, improvements, the headline), findings.json,
+## compare.md (every metric, per-process table, telemetry counters), ab.json
+## (identities, windows, findings, file paths — for tooling), notebook.json
+## and a copy of this file; per run, results/<name>/<side>[-<round>]/ with
+## report.md, report.json, timeseries.csv, profiles/ (the agent's pprof
+## uploads over the window), agent.log and agent-status.txt.
 #
 # results: results
 
 ## @param notebook - boolean - optional - default: true when DD_APP_KEY is set
-## Create the A/B notebook in Datadog. notebook.json is always written and
-## can be handed to the Datadog MCP's create_datadog_notebook instead.
+## Create the A/B notebook in Datadog: the brief first (verdict, one cell per
+## regression with its evidence, the profile diffs and links), then the
+## charts with both agents overlaid, the full table last. notebook.json is
+## always written and can be handed to the Datadog MCP's
+## create_datadog_notebook instead.
 #
 # notebook: true
 

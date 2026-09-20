@@ -225,8 +225,8 @@ func (s *Server) buildReport(withGaps bool) *report.Report {
 	// Resources + per-minute rollups.
 	res := &r.Resources
 	var cpuSum, procSum float64
-	var memSum int64
-	var nCPU, nMem, nProc int
+	var memSum, anonSum, fileSum int64
+	var nCPU, nMem, nProc, nAnon int
 	minutes := map[int64]*minuteAcc{}
 	for _, p := range points {
 		if p.Logs > tp.PeakRecvLogsPerSec {
@@ -259,6 +259,19 @@ func (s *Server) buildReport(withGaps bool) *report.Report {
 		if p.ProcRSS > res.ProcessRSSMax {
 			res.ProcessRSSMax = p.ProcRSS
 		}
+		if p.AgentAnon >= 0 {
+			anonSum += p.AgentAnon
+			nAnon++
+			if p.AgentAnon > res.ContainerAnonMax {
+				res.ContainerAnonMax = p.AgentAnon
+			}
+		}
+		if p.AgentFile >= 0 {
+			fileSum += p.AgentFile
+			if p.AgentFile > res.ContainerFileMax {
+				res.ContainerFileMax = p.AgentFile
+			}
+		}
 		m := p.T - p.T%60
 		acc := minutes[m]
 		if acc == nil {
@@ -276,6 +289,12 @@ func (s *Server) buildReport(withGaps bool) *report.Report {
 	}
 	if nProc > 0 {
 		res.ProcessCPUAvg = procSum / float64(nProc)
+	}
+	if nAnon > 0 {
+		res.ContainerAnonAvg, res.ContainerFileAvg = anonSum/int64(nAnon), fileSum/int64(nAnon)
+	}
+	if s.agent != nil {
+		res.Processes = s.agent.processes()
 	}
 	res.IntakeCPUAvg, res.IntakeRSSMax = s.proc.Averages()
 	res.GenCPUAvg = genCPU
