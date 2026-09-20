@@ -2,6 +2,7 @@ package findings
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,6 +121,10 @@ func TestBuildAndMarkdown(t *testing.T) {
 		if strings.Contains(md, unwanted) {
 			t.Errorf("markdown should not contain %q", unwanted)
 		}
+	}
+	// A counter that appeared (0 → 3) must still serialise: no ±Inf in the JSON.
+	if _, err := json.Marshal(res); err != nil {
+		t.Errorf("findings.json: %v", err)
 	}
 	ev := EventText(res, in, "https://x/notebook/1")
 	if !strings.HasPrefix(ev, "%%% ") || !strings.HasSuffix(ev, "%%%") || !strings.Contains(ev, "Memory: Process memory grew") || len(ev) > 4000 {

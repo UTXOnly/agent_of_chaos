@@ -226,13 +226,17 @@ func classify(row report.HeadlineRow, threshold float64) *Finding {
 		topic = "other"
 	}
 	f := &Finding{Metric: row.Metric, Topic: topic, A: row.Cells[0], B: row.Cells[1], Delta: row.Deltas[0], Pct: pct}
+	if math.IsNaN(pct) || math.IsInf(pct, 0) {
+		f.Pct = 0
+	}
 	isCounter := topic == "delivery" && row.Metric != "delivery ratio" || topic == "stability" && row.Metric != "core agent goroutines"
 	switch {
 	case isCounter && a == 0 && b == 0:
 		return nil
 	case isCounter && a == 0 && b > 0:
+		// Appeared: no percentage (and json cannot carry +Inf).
 		f.Kind = "regression"
-		f.Pct = math.Inf(1)
+		f.Pct = 0
 		return f
 	case isCounter && a > 0 && b == 0:
 		f.Kind = "improvement"
