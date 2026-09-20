@@ -113,6 +113,7 @@ func runReport(args []string) int {
 	}
 	fmt.Printf("wrote %s/report.json, report.md, timeseries.csv\n\n", dir)
 	printVerdict(r)
+	fmt.Printf("notebook: aoc notebook --results %s\n", dir)
 	return 0
 }
 

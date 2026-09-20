@@ -1,8 +1,9 @@
 # Tag-filter fleet: 15 log generators (8 plain-text, 7 JSON) tailed by a single
 # Datadog Agent (by default the datadog/agent-dev:log-tag-filtering build), with
-# logs going to the aoc fake intake instead of Datadog. Metrics still go to
-# Datadog when DD_API_KEY is real, so agent CPU/memory dashboards keep working;
-# the intake measures tag bytes per log, wire bytes and delivery directly.
+# logs going to the aoc fake intake instead of Datadog. The agent's own metrics
+# and profiles go to Datadog as usual and the intake submits aoc.* metrics
+# (delivery, tag bytes per log, wire bytes, latency, agent CPU/memory), all
+# tagged run:<AOC_VARIANT>, so baseline and comparison are one notebook apart.
 #
 # This file alone is the BASELINE (no DD_LOGS_CONFIG_TAG_FILTERS). Stack the
 # overlay for the COMPARISON with tag filters applied:
@@ -10,11 +11,9 @@
 #   cp .env.example .env   # set DD_API_KEY, AOC_VARIANT (and DD_SITE if needed)
 #   docker compose -f docker-compose.tag-filter.yml up --build -d                                       # baseline
 #   docker compose -f docker-compose.tag-filter.yml -f docker-compose.tag-filter.filters.yml up --build -d  # comparison
-#   open http://<host>:8282                              # dashboard (ssh -L 8282:localhost:8282 on EC2)
-#   aoc report --intake http://localhost:8282 --out results/$AOC_VARIANT
+#   aoc report --intake http://localhost:8282 --out results/$AOC_VARIANT   # (ssh -L 8282:localhost:8282 on EC2)
+#   aoc notebook --results results/baseline --results results/comparison
 #   docker compose -f docker-compose.tag-filter.yml down -v
-#
-# Fully offline (no real API key, metrics swallowed too): DD_DD_URL=http://localhost:8282
 #
 # Every generator writes to its own subdir of the shared log volume; the agent
 # tails those files (datadog/conf.d/agent_of_chaos.d/conf.yaml), adding
@@ -63,6 +62,10 @@ services:
       - --agent-telemetry=http://localhost:5000/telemetry
       - --docker-container=dd-agent-tag-filter
       - --agent-image=${DD_AGENT_IMAGE:-datadog/agent-dev:log-tag-filtering-9e35a50b-full}
+      - --dd-tags=experiment:log-tag-filter,variant:${AOC_VARIANT:-local}
+    environment:
+      DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
     ports:
       - "${AOC_INTAKE_PORT:-8282}:8282"
     volumes:
@@ -94,6 +97,7 @@ services:
       DD_TAGS: >-
         experiment:log-tag-filter
         variant:${AOC_VARIANT:-local}
+        run:${AOC_VARIANT:-local}
         project:agent-of-chaos
         region:local
         availability-zone:local-a

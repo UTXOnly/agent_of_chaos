@@ -192,14 +192,12 @@ func analyze(e *logEntry, b *batch, now time.Time) {
 	}
 
 	// End-to-end latency: written (timestamp inside the line) → received.
-	var e2e float64 = -1
 	if ts, ok := writeTimestamp(msg); ok {
 		if ts.Year() >= 2010 { // deterministic runs stamp year 2000
 			d := now.Sub(ts).Seconds()
 			if d < 0 {
 				d = 0
 			}
-			e2e = d
 			b.e2e = append(b.e2e, d)
 		} else {
 			b.e2eNoTS++
@@ -225,17 +223,6 @@ func analyze(e *logEntry, b *batch, now time.Time) {
 	bump(b.sources, e.Source, int64(len(msg)))
 	bump(b.hosts, e.Hostname, int64(len(msg)))
 	bump(b.statuses, e.Status, int64(len(msg)))
-
-	if b.sample == nil {
-		m := msg
-		if len(m) > 2048 {
-			m = m[:2048] + "…"
-		}
-		b.sample = &Sample{
-			At: now, Service: e.Service, Source: e.Source, Host: e.Hostname, Status: e.Status,
-			Tags: e.Tags, Message: m, Latency: e2e, Marked: marked,
-		}
-	}
 }
 
 // physicalLineBreaks counts the line breaks the agent folded into one log.

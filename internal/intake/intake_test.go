@@ -336,11 +336,10 @@ func TestSinkAndValidate(t *testing.T) {
 	if !strings.Contains(string(b), "aoc_intake_logs_total 0") {
 		t.Errorf("metrics: %s", b)
 	}
-	resp, _ = http.Get(ts.URL + "/")
-	b, _ = io.ReadAll(resp.Body)
+	resp, _ = http.Get(ts.URL + "/harness/status")
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(string(b), "logs harness") {
-		t.Errorf("ui: %d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Errorf("status: %d", resp.StatusCode)
 	}
 	if rep := s.buildReport(false); rep.HTTP.OtherRequests["/api/v2/series"] != 1 {
 		t.Errorf("other requests: %+v", rep.HTTP.OtherRequests)

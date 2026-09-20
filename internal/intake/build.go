@@ -44,6 +44,10 @@ func (s *Server) buildReport(withGaps bool) *report.Report {
 	r.Agent = report.Agent{
 		Versions: copyMap(st.agentVersions), Origins: copyMap(st.origins), UserAgent: copyMap(st.userAgents),
 		APIKeys: copyMap(st.apiKeys), Encodings: copyMap(st.byEncoding), Paths: copyMap(st.byPath), Image: s.cfg.AgentImage,
+		Container: s.cfg.DockerContainer,
+	}
+	if hosts := topN(st.hosts, 1); len(hosts) > 0 && hosts[0].Name != "(none)" {
+		r.Agent.Hostname = hosts[0].Name
 	}
 
 	// Generators + per-stream generated seqs.

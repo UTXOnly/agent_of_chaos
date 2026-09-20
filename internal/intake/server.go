@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/UTXOnly/agent_of_chaos/internal/fmtutil"
 	"github.com/UTXOnly/agent_of_chaos/internal/procstat"
-	"github.com/UTXOnly/agent_of_chaos/internal/report"
 	"github.com/UTXOnly/agent_of_chaos/internal/wire"
 )
 
@@ -48,6 +48,9 @@ type Config struct {
 	Verbose   bool          // log every request
 	Quiet     bool
 	Version   string
+
+	// Datadog submits the harness's measurements as <prefix>.* metrics.
+	Datadog DDConfig
 }
 
 // DefaultConfig returns sensible defaults: :8282 HTTP, :10516 TCP, 5 MB
@@ -62,16 +65,17 @@ func DefaultConfig() Config {
 
 // Server is the fake intake.
 type Server struct {
-	cfg    Config
-	stats  *Stats
-	faults *faultState
-	agent  *agentObs
-	proc   procstat.Sampler
-	out    *os.File
-	mux    *http.ServeMux
-	http   *http.Server
-	start  time.Time
-	mu     sync.Mutex
+	cfg     Config
+	stats   *Stats
+	faults  *faultState
+	agent   *agentObs
+	emitter *emitter
+	proc    procstat.Sampler
+	out     *os.File
+	mux     *http.ServeMux
+	http    *http.Server
+	start   time.Time
+	mu      sync.Mutex
 }
 
 // New builds a server; nothing listens until Run.
@@ -100,6 +104,12 @@ func New(cfg Config) (*Server, error) {
 		s.agent = obs
 		s.stats.agent = obs
 	}
+	if cfg.Datadog.Enabled {
+		if cfg.Datadog.APIKey == "" {
+			return nil, errors.New("datadog metrics enabled but no API key (set DD_API_KEY or --dd-api-key)")
+		}
+		s.emitter = newEmitter(s, cfg.Datadog)
+	}
 	if cfg.Faults.Active() {
 		s.setFaults(cfg.Faults, "initial")
 	}
@@ -125,17 +135,16 @@ func (s *Server) routes() {
 	m.HandleFunc("/api/v1/validate", s.handleValidate)
 	// Harness API.
 	m.HandleFunc("POST "+wire.GenReportPath, s.handleGenReport)
-	m.HandleFunc("GET /harness/stats", s.handleStats)
+	m.HandleFunc("GET /harness/status", s.handleStatus)
 	m.HandleFunc("GET /harness/timeseries", s.handleTimeseries)
 	m.HandleFunc("GET /harness/report", s.handleReport)
 	m.HandleFunc("GET /harness/faults", s.handleFaultsGet)
 	m.HandleFunc("POST /harness/faults", s.handleFaultsSet)
 	m.HandleFunc("DELETE /harness/faults", s.handleFaultsClear)
 	m.HandleFunc("POST /harness/reset", s.handleReset)
-	m.HandleFunc("GET /harness/samples", s.handleSamples)
+	m.HandleFunc("POST /harness/mark", s.handleMark)
 	m.HandleFunc("GET /metrics", s.handleMetrics)
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok\n") })
-	s.uiRoutes(m)
 	// Everything else the agent may send (metrics, metadata, check runs,
 	// sketches, remote config...): swallow with 202 so a run can be fully
 	// offline.
@@ -171,6 +180,10 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 	go s.ticker(ctx)
+	if s.emitter != nil {
+		go s.emitter.run(ctx)
+		s.emitter.event("aoc: intake started", fmt.Sprintf("Run %s: intake listening on %s", s.cfg.Name, s.cfg.Addr), "info")
+	}
 	s.banner(ln.Addr().String(), tcpLn)
 
 	errc := make(chan error, 1)
@@ -188,6 +201,10 @@ func (s *Server) Run(ctx context.Context) error {
 	if tcpLn != nil {
 		tcpLn.Close()
 	}
+	if s.emitter != nil {
+		// One last batch so the final window state lands in Datadog.
+		s.emitter.flush(shutCtx)
+	}
 	s.summary()
 	return nil
 }
@@ -198,7 +215,6 @@ func (s *Server) banner(addr string, tcpLn net.Listener) {
 	}
 	_, port, _ := net.SplitHostPort(addr)
 	fmt.Fprintf(s.out, "\nagent_of_chaos intake  name=%s\n", s.cfg.Name)
-	fmt.Fprintf(s.out, "  dashboard   http://localhost:%s/\n", port)
 	fmt.Fprintf(s.out, "  logs (HTTP) http://<this-host>:%s/api/v2/logs   ← DD_LOGS_CONFIG_LOGS_DD_URL=http://<this-host>:%s\n", port, port)
 	if tcpLn != nil {
 		_, tp, _ := net.SplitHostPort(tcpLn.Addr().String())
@@ -213,6 +229,11 @@ func (s *Server) banner(addr string, tcpLn net.Listener) {
 	}
 	if s.cfg.DockerContainer != "" {
 		fmt.Fprintf(s.out, "  observing   docker stats for container %q\n", s.cfg.DockerContainer)
+	}
+	if s.emitter != nil {
+		fmt.Fprintf(s.out, "  datadog     %s.* metrics + events → %s (tags %s)\n", s.cfg.Datadog.Prefix, s.emitter.client.Site, strings.Join(s.emitter.tags, ","))
+	} else {
+		fmt.Fprintf(s.out, "  datadog     off (set DD_API_KEY to submit %s.* metrics)\n", "aoc")
 	}
 	if f := s.faults.get(); f.Active() {
 		fmt.Fprintf(s.out, "  faults      %s\n", f)
@@ -438,9 +459,6 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	for i := range entries {
 		analyze(&entries[i], &b, now)
 	}
-	if b.sample != nil {
-		b.sample.Encoding, b.sample.Path, b.sample.Logs, b.sample.Wire, b.sample.Raw = encoding, r.URL.Path, len(entries), b.wire, b.raw
-	}
 	writeJSON(w, 202, map[string]any{})
 	finish(202, "ok")
 }
@@ -465,142 +483,88 @@ func (s *Server) handleGenReport(w http.ResponseWriter, r *http.Request) {
 	s.stats.genReport(&rep, time.Now())
 	if first {
 		s.logf("[gen] %s registered: mode=%s format=%s output=%s streams=%d rate=%s", rep.Gen, rep.Mode, rep.Format, rep.Output, rep.ActiveStreams, fmtutil.Rate(rep.Knobs.Rate))
+		s.emitter.event("aoc: generator "+rep.Gen+" started",
+			fmt.Sprintf("mode=%s format=%s output=%s streams=%d rate=%s", rep.Mode, rep.Format, rep.Output, rep.ActiveStreams, fmtutil.Rate(rep.Knobs.Rate)), "info", "gen:"+rep.Gen)
 	}
 	if rep.Final {
 		s.logf("[gen] %s finished: records=%s bytes=%s", rep.Gen, fmtutil.Int(rep.Totals.Records), fmtutil.Bytes(rep.Totals.Bytes))
+		s.emitter.event("aoc: generator "+rep.Gen+" finished",
+			fmt.Sprintf("records=%s bytes=%s rotations=%d", fmtutil.Int(rep.Totals.Records), fmtutil.Bytes(rep.Totals.Bytes), rep.Totals.Rotations), "info", "gen:"+rep.Gen)
 	}
 	w.WriteHeader(204)
 }
 
-// Snapshot is what the dashboard polls: the report plus live state.
-type Snapshot struct {
-	Report *report.Report `json:"report"`
-	Live   Live           `json:"live"`
+// Status is the small live view `aoc run` polls while draining.
+type Status struct {
+	Now           time.Time `json:"now"`
+	Name          string    `json:"name"`
+	Version       string    `json:"version"`
+	UptimeSeconds float64   `json:"uptime_seconds"`
+	WindowSeconds float64   `json:"window_seconds"`
+	Faults        Faults    `json:"faults"`
+	FaultsActive  bool      `json:"faults_active"`
+	Inflight      int64     `json:"inflight"`
+	// RecentLogsPerSec is the receive rate over the last 10 s.
+	RecentLogsPerSec float64        `json:"recent_logs_per_sec"`
+	Missing          int64          `json:"missing"`
+	Unique           int64          `json:"unique"`
+	Generated        int64          `json:"generated"`
+	Generators       []GenStatus    `json:"generators"`
+	Observer         ObserverStatus `json:"observer"`
+	DDMetrics        EmitterStatus  `json:"dd_metrics"`
 }
 
-type Live struct {
-	Now           time.Time      `json:"now"`
-	Version       string         `json:"version"`
-	UptimeSeconds float64        `json:"uptime_seconds"`
-	Faults        Faults         `json:"faults"`
-	FaultsActive  bool           `json:"faults_active"`
-	FaultsSince   time.Time      `json:"faults_since"`
-	Inflight      int64          `json:"inflight"`
-	Recent        Recent         `json:"recent"`
-	Observer      ObserverStatus `json:"observer"`
-	Generators    []GenLive      `json:"generators"`
-	Samples       []Sample       `json:"samples"`
-	IntakeCPU     float64        `json:"intake_cpu_percent"`
-	IntakeRSS     int64          `json:"intake_rss_bytes"`
-	TCPEnabled    bool           `json:"tcp_enabled"`
-}
-
-// Recent covers the last ten seconds.
-type Recent struct {
-	Seconds       int     `json:"seconds"`
-	GenRecords    float64 `json:"gen_records_per_sec"`
-	GenBytes      float64 `json:"gen_bytes_per_sec"`
-	RecvLogs      float64 `json:"recv_logs_per_sec"`
-	RecvRawBytes  float64 `json:"recv_raw_bytes_per_sec"`
-	RecvWireBytes float64 `json:"recv_wire_bytes_per_sec"`
-	Requests      float64 `json:"requests_per_sec"`
-	Errors        int64   `json:"errors"`
-	E2EP50        float64 `json:"e2e_p50"`
-	E2EP99        float64 `json:"e2e_p99"`
-	SenderP99     float64 `json:"sender_p99"`
-}
-
-type GenLive struct {
+// GenStatus is one generator's liveness.
+type GenStatus struct {
 	Name          string  `json:"name"`
 	Mode          string  `json:"mode"`
 	Phase         string  `json:"phase"`
 	ActiveStreams int     `json:"active_streams"`
 	TargetRate    float64 `json:"target_rate"`
 	RecordRate    float64 `json:"record_rate"`
-	ByteRate      float64 `json:"byte_rate"`
 	AgoSeconds    float64 `json:"ago_seconds"`
 	Final         bool    `json:"final"`
-	CPUPercent    float64 `json:"cpu_percent"`
 }
 
-func (s *Server) snapshot() *Snapshot {
+func (s *Server) status() *Status {
 	rep := s.buildReport(false)
 	now := time.Now()
 	st := s.stats
-	live := Live{Now: now, Version: s.cfg.Version, UptimeSeconds: now.Sub(s.start).Seconds(), Inflight: st.inflight.Load(), TCPEnabled: s.cfg.TCPAddr != ""}
-	live.Faults = s.faults.get()
-	live.FaultsActive = live.Faults.Active()
-	s.faults.mu.RLock()
-	live.FaultsSince = s.faults.since
-	s.faults.mu.RUnlock()
-	if s.agent != nil {
-		live.Observer = s.agent.status()
+	out := &Status{
+		Now: now, Name: s.cfg.Name, Version: s.cfg.Version, UptimeSeconds: now.Sub(s.start).Seconds(),
+		WindowSeconds: rep.Seconds, Inflight: st.inflight.Load(),
+		Missing: rep.Delivery.Missing, Unique: rep.Delivery.Unique, Generated: rep.Delivery.GeneratedRecords,
 	}
-	_, cpu, rss := s.proc.Sample()
-	live.IntakeCPU, live.IntakeRSS = cpu, rss
-
+	out.Faults = s.faults.get()
+	out.FaultsActive = out.Faults.Active()
+	if s.agent != nil {
+		out.Observer = s.agent.status()
+	}
+	if s.emitter != nil {
+		out.DDMetrics = s.emitter.status()
+	}
 	st.mu.Lock()
 	pts := st.ts.since(now.Unix() - 10)
 	for name, g := range st.gens {
-		live.Generators = append(live.Generators, GenLive{
+		out.Generators = append(out.Generators, GenStatus{
 			Name: name, Mode: g.Last.Mode, Phase: g.Last.Phase, ActiveStreams: g.Last.ActiveStreams, TargetRate: g.Last.Knobs.Rate,
-			RecordRate: g.RecordRate, ByteRate: g.ByteRate, AgoSeconds: now.Sub(g.LastSeen).Seconds(), Final: g.Last.Final, CPUPercent: g.Last.CPUPercent,
+			RecordRate: g.RecordRate, AgoSeconds: now.Sub(g.LastSeen).Seconds(), Final: g.Last.Final,
 		})
 	}
-	for i := len(st.samples) - 1; i >= 0; i-- {
-		live.Samples = append(live.Samples, st.samples[i])
-	}
 	st.mu.Unlock()
-	sortGenLive(live.Generators)
-
-	rc := &live.Recent
-	rc.Seconds = len(pts)
+	sort.Slice(out.Generators, func(i, j int) bool { return out.Generators[i].Name < out.Generators[j].Name })
 	if len(pts) > 0 {
-		n := float64(len(pts))
-		var e50 float64
-		var n50 int
+		var logs int64
 		for _, p := range pts {
-			rc.GenRecords += p.GenRecords
-			rc.GenBytes += p.GenBytes
-			rc.RecvLogs += float64(p.Logs)
-			rc.RecvRawBytes += float64(p.RawBytes)
-			rc.RecvWireBytes += float64(p.WireBytes)
-			rc.Requests += float64(p.Requests)
-			rc.Errors += p.Err4xx + p.Err5xx + p.Dropped
-			if p.E2EP50 > 0 {
-				e50 += p.E2EP50
-				n50++
-			}
-			if p.E2EP99 > rc.E2EP99 {
-				rc.E2EP99 = p.E2EP99
-			}
-			if p.SenderP99 > rc.SenderP99 {
-				rc.SenderP99 = p.SenderP99
-			}
+			logs += p.Logs
 		}
-		rc.GenRecords /= n
-		rc.GenBytes /= n
-		rc.RecvLogs /= n
-		rc.RecvRawBytes /= n
-		rc.RecvWireBytes /= n
-		rc.Requests /= n
-		if n50 > 0 {
-			rc.E2EP50 = e50 / float64(n50)
-		}
+		out.RecentLogsPerSec = float64(logs) / float64(len(pts))
 	}
-	return &Snapshot{Report: rep, Live: live}
+	return out
 }
 
-func sortGenLive(g []GenLive) {
-	for i := 1; i < len(g); i++ {
-		for j := i; j > 0 && g[j].Name < g[j-1].Name; j-- {
-			g[j], g[j-1] = g[j-1], g[j]
-		}
-	}
-}
-
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.snapshot())
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.status())
 }
 
 func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
@@ -644,7 +608,11 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setFaults(f Faults, desc string) {
+	prev := s.faults.get()
 	s.faults.set(f)
+	if !f.Active() && !prev.Active() {
+		return // clearing nothing is not an event
+	}
 	ev := FaultEvent{At: time.Now(), Faults: f, Desc: desc + ": " + f.String()}
 	s.stats.mu.Lock()
 	s.stats.faultLog = append(s.stats.faultLog, ev)
@@ -653,6 +621,11 @@ func (s *Server) setFaults(f Faults, desc string) {
 	}
 	s.stats.mu.Unlock()
 	s.logf("[faults] %s", ev.Desc)
+	alert := "warning"
+	if !f.Active() {
+		alert = "success"
+	}
+	s.emitter.event("aoc: faults "+desc, ev.Desc, alert)
 }
 
 func (s *Server) handleFaultsGet(w http.ResponseWriter, r *http.Request) {
@@ -687,16 +660,6 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}
 	s.logf("[reset] counters zeroed (window starts now)")
+	s.emitter.event("aoc: measurement window opened", fmt.Sprintf("Run %s: counters reset, window starts now", s.cfg.Name), "info")
 	writeJSON(w, 200, map[string]any{"reset_at": time.Now()})
-}
-
-func (s *Server) handleSamples(w http.ResponseWriter, r *http.Request) {
-	st := s.stats
-	st.mu.Lock()
-	out := make([]Sample, 0, len(st.samples))
-	for i := len(st.samples) - 1; i >= 0; i-- {
-		out = append(out, st.samples[i])
-	}
-	st.mu.Unlock()
-	writeJSON(w, 200, out)
 }

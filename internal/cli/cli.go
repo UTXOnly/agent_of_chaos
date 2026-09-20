@@ -62,7 +62,7 @@ Usage:
 
 Commands:
 `)
-	order := []string{"generate", "intake", "run", "report", "compare", "ship", "scenarios", "profiles", "version"}
+	order := []string{"generate", "intake", "run", "report", "compare", "notebook", "ship", "scenarios", "profiles", "version"}
 	byName := map[string]command{}
 	for _, c := range commands {
 		byName[c.name] = c
@@ -77,10 +77,10 @@ Commands:
 Every flag can also be set with an environment variable: AOC_<FLAG> with
 dashes as underscores (--log-dir → AOC_LOG_DIR). Flags win over env.
 
-Quick start (Docker, no real Datadog account needed):
-  docker compose up -d                 # intake + agent + generators
-  open http://localhost:8282           # live dashboard
+Quick start (Docker; DD_API_KEY in .env so metrics land in Datadog):
+  docker compose up -d --build         # intake + agent + generators
   aoc report --intake http://localhost:8282 --out results/baseline
+  aoc notebook --results results/baseline          # → Datadog notebook (needs DD_APP_KEY)
 `)
 }
 
@@ -282,6 +282,8 @@ func placeholder(f *flag.Flag) string {
 		return "SIZE"
 	}
 	switch {
+	case strings.Contains(f.Name, "filter"):
+		return "REGEX"
 	case strings.Contains(f.Name, "dir"), strings.Contains(f.Name, "file"), strings.Contains(f.Name, "socket"):
 		return "PATH"
 	case strings.Contains(f.Name, "url"), strings.Contains(f.Name, "intake"), strings.Contains(f.Name, "telemetry"):
@@ -306,6 +308,13 @@ func signalContext() (context.Context, context.CancelFunc) {
 		os.Exit(130)
 	}()
 	return ctx, cancel
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func fail(format string, args ...any) int {

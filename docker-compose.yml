@@ -1,17 +1,22 @@
 # agent_of_chaos harness: fake Datadog logs intake + the Agent under test +
-# log generators, fully offline by default (no real API key needed).
+# log generators. Logs go to the intake (never to Datadog); the intake
+# submits the harness's measurements to Datadog as aoc.* metrics and events,
+# and the agent ships its own metrics/profiles as usual, all tagged
+# run:<AOC_RUN_NAME>, so every run is a shareable record in Datadog.
 #
+#   cp .env.example .env                    # DD_API_KEY (required), DD_APP_KEY for notebooks
 #   docker compose up -d --build            # intake + agent + gen-plain + gen-json
-#   open http://localhost:8282              # live dashboard
 #   aoc report --intake http://localhost:8282 --out results/my-run
+#   aoc notebook --results results/my-run   # Datadog notebook for the run
 #   docker compose down -v                  # -v: also drop the log volume for a clean next run
 #
 # Tunables (put them in .env or on the command line):
 #   DD_AGENT_IMAGE=datadog/agent-dev:my-build   agent image under test
+#   AOC_RUN_NAME=my-run                          run tag on every metric/event (aoc run sets it)
 #   AOC_RATE=20000 AOC_STREAMS=16               per-generator workload
-#   DD_DD_URL=https://app.datadoghq.com          ship metrics to real Datadog (needs a real DD_API_KEY)
 #   docker compose --profile stdout up -d        add a generator that logs to stdout (docker log driver path)
 #   docker compose up -d --scale gen-plain=4     more generator containers
+#   -f docker-compose.offline.yml               no API key: metrics swallowed by the intake, nothing leaves the host
 #
 # `aoc run --profile profiles/<name>.yaml` drives all of this for you.
 
@@ -64,6 +69,11 @@ services:
       - --agent-telemetry=http://localhost:5000/telemetry
       - --docker-container=aoc-agent
       - --agent-image=${DD_AGENT_IMAGE:-datadog/agent:7}
+      - --dd-tags=${AOC_DD_TAGS:-harness:aoc}
+    environment:
+      DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env (or use docker-compose.offline.yml)}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      AOC_DD_METRICS: ${AOC_DD_METRICS:-true}
     ports:
       - "${AOC_INTAKE_PORT:-8282}:8282"
       - "${AOC_TCP_PORT:-10516}:10516"
@@ -89,15 +99,13 @@ services:
         condition: service_healthy
     stop_grace_period: 20s
     environment:
-      DD_API_KEY: ${DD_API_KEY:-00000000000000000000000000000000}
+      DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env (or use docker-compose.offline.yml)}
       DD_SITE: ${DD_SITE:-datadoghq.com}
-      # Everything that is not logs (metrics, metadata, check runs) goes to
-      # the intake's 202 sink, so the run is offline. Point it at
-      # https://app.datadoghq.com (with a real DD_API_KEY) to keep metrics real.
-      DD_DD_URL: ${DD_DD_URL:-http://localhost:8282}
       DD_HOSTNAME: ${DD_HOSTNAME:-aoc-harness}
       DD_ENV: ${DD_ENV:-aoc-harness}
-      DD_TAGS: ${DD_TAGS:-harness:aoc}
+      # run:<name> makes the agent's own metrics/profiles line up with the
+      # intake's aoc.* metrics in the notebook.
+      DD_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local} ${DD_TAGS:-}"
       DD_LOGS_ENABLED: "true"
       DD_LOGS_CONFIG_LOGS_DD_URL: http://localhost:8282
       DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
@@ -112,7 +120,9 @@ services:
       DD_PROCESS_CONFIG_PROCESS_COLLECTION_ENABLED: "false"
       DD_PROCESS_CONFIG_CONTAINER_COLLECTION_ENABLED: "false"
       DD_REMOTE_CONFIGURATION_ENABLED: "false"
-      DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-false}
+      # The agent's own CPU/heap profiles land in the Continuous Profiler
+      # (service:datadog-agent, host:${DD_HOSTNAME}).
+      DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-true}
     volumes:
       - aoc-logs:/var/log/agent-of-chaos:ro
       - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro

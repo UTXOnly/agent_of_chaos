@@ -41,6 +41,8 @@ type Agent struct {
 	Encodings map[string]int64 `json:"encodings"`  // Content-Encoding → requests
 	Paths     map[string]int64 `json:"paths"`      // logs endpoint → requests
 	Image     string           `json:"image,omitempty"`
+	Container string           `json:"container,omitempty"` // docker container name observed for CPU/memory
+	Hostname  string           `json:"hostname,omitempty"`  // most common hostname in received logs
 }
 
 // Generator summarizes one generator process over the window.

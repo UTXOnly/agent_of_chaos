@@ -1,7 +1,8 @@
 # Measurements
 
-What every number in the dashboard, `report.md` and `report.json` means, how it
-is computed, and where it can mislead you.
+What every number in `report.md` / `report.json` (and its `aoc.*` metric in
+Datadog, see [datadog.md](datadog.md)) means, how it is computed, and where it
+can mislead you.
 
 ## The marker
 
@@ -21,7 +22,7 @@ stack trace have no marker: they belong to the record above them.
 | **with a marker / unique** | marked logs, and distinct `(gen, stream, seq)` triples. |
 | **duplicates** | a seq seen again. The usual cause: the agent did not get the intake's response (timeouts, `drop_rate`) and re-sent. |
 | **out of order** | seq lower than the previous seq from the same stream. Concurrent senders reorder batches; the agent does this too. |
-| **missing / lost** | `generated − unique` per stream. While generators run this includes in-flight logs, so the dashboard labels it *outstanding*; once every generator has sent its final report it is *lost*. `aoc run` waits for the drain before reporting. |
+| **missing / lost** | `generated − unique` per stream. While generators run this includes in-flight logs, so the report labels it *missing (still running)*; once every generator has sent its final report it is *lost*. `aoc run` waits for the drain before reporting. |
 | **gaps** | the first missing seq ranges per stream (`report?gaps=1`, `report.md`). Ranges that start right after a rotation boundary point at a tailer rotation race. |
 | **orphan continuation lines** | unmarked logs that look like stack-trace lines (indented, `at …`, `Caused by:`, `Traceback`, `panic:`, `FooError:`…): multiline aggregation split a trace. |
 | **unmarked** | everything else without a marker: the agent's own container logs, other containers, the generators' stderr status lines. |

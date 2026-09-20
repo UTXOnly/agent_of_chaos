@@ -8,26 +8,6 @@ import (
 	"github.com/UTXOnly/agent_of_chaos/internal/wire"
 )
 
-// Sample is one received log kept for the "what did the agent actually
-// send" view.
-type Sample struct {
-	At       time.Time `json:"at"`
-	Service  string    `json:"service"`
-	Source   string    `json:"source"`
-	Host     string    `json:"host"`
-	Status   string    `json:"status"`
-	Tags     string    `json:"tags"`
-	Message  string    `json:"message"`
-	Encoding string    `json:"encoding"`
-	Path     string    `json:"path"`
-	Logs     int       `json:"payload_logs"`
-	Wire     int64     `json:"payload_wire_bytes"`
-	Raw      int64     `json:"payload_raw_bytes"`
-	Latency  float64   `json:"e2e_seconds"`
-	Marked   bool      `json:"marked"`
-}
-
-const maxSamples = 50
 const maxCardinality = 2000
 
 // batch is the per-request aggregate, built without holding the stats lock.
@@ -50,7 +30,6 @@ type batch struct {
 	obs                                []seqObs
 	services, sources, hosts, statuses map[string]*nameCount
 	tagKeys                            map[string]int64
-	sample                             *Sample
 }
 
 func bump(m map[string]*nameCount, name string, bytes int64) {
@@ -145,10 +124,13 @@ type Stats struct {
 
 	gens map[string]*genState
 
-	track   *tracker
-	ts      *timeseries
-	samples []Sample
-	sampleN int64
+	track *tracker
+	ts    *timeseries
+
+	// Interval histograms feed the Datadog metric emitter; it resets them
+	// after every submission.
+	e2eEmit    *hist
+	senderEmit *hist
 
 	faultLog []FaultEvent
 	agent    *agentObs
@@ -182,6 +164,8 @@ func (s *Stats) initMaps() {
 	s.procTime = newLatencyHist()
 	s.e2e = newLatencyHist()
 	s.sender = newLatencyHist()
+	s.e2eEmit = newLatencyHist()
+	s.senderEmit = newLatencyHist()
 	if s.gens == nil {
 		s.gens = map[string]*genState{}
 	}
@@ -198,8 +182,6 @@ func (s *Stats) Reset() {
 	s.multiline, s.truncated, s.tagCount, s.tagBytes, s.e2eNoTS = 0, 0, 0, 0, 0
 	s.tcpFrames, s.tcpBytes = 0, 0
 	s.initMaps()
-	s.samples = nil
-	s.sampleN = 0
 	s.faultLog = nil
 	s.ts.reset()
 	bases := map[string]map[string]int64{}
@@ -269,10 +251,12 @@ func (s *Stats) merge(b *batch, now time.Time) {
 	for _, v := range b.e2e {
 		s.e2e.add(v)
 		s.ts.e2eOpen.add(v)
+		s.e2eEmit.add(v)
 	}
 	for _, v := range b.sender {
 		s.sender.add(v)
 		s.ts.senderOpen.add(v)
+		s.senderEmit.add(v)
 	}
 	for k, c := range b.services {
 		bumpN(s.services, k, c.Count, c.Bytes)
@@ -288,14 +272,6 @@ func (s *Stats) merge(b *batch, now time.Time) {
 	}
 	for k, n := range b.tagKeys {
 		bumpN(s.tagKeys, k, n, 0)
-	}
-	if b.sample != nil {
-		s.sampleN++
-		if len(s.samples) < maxSamples {
-			s.samples = append(s.samples, *b.sample)
-		} else {
-			s.samples[int(s.sampleN)%maxSamples] = *b.sample
-		}
 	}
 
 	p := &s.ts.open

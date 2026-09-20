@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
 	"github.com/UTXOnly/agent_of_chaos/internal/gen"
+	"github.com/UTXOnly/agent_of_chaos/internal/notebook"
+	"github.com/UTXOnly/agent_of_chaos/internal/report"
 )
 
 func init() {
@@ -279,6 +283,8 @@ func runRun(args []string) int {
 	out := fs.Str("out", "results", "results root directory")
 	keep := fs.Bool("keep", false, "leave the stack running afterwards (default: docker compose down -v)")
 	noBuild := fs.Bool("no-build", false, "do not rebuild the aoc image")
+	mkNotebook := fs.Bool("notebook", os.Getenv("DD_APP_KEY") != "", "create a Datadog notebook for the run (default: when DD_APP_KEY is set; notebook.json is always written)")
+	ddSite := fs.Str("dd-site", envOr("DD_SITE", "datadoghq.com"), "Datadog site for the notebook (env DD_SITE)")
 	if !fs.parse(args) {
 		return 2
 	}
@@ -370,7 +376,7 @@ func runRun(args []string) int {
 		return fail("run: reset: %v", err)
 	}
 	windowStart := time.Now()
-	logf("measured window open for %s — dashboard: %s", p.Duration, *intake)
+	logf("measured window open for %s (metrics tagged run:%s)", p.Duration, sanitize(*name))
 
 	// Fault timeline, cut off at the end of the window.
 	windowCtx, cancelWindow := context.WithDeadline(ctx, windowStart.Add(p.Duration.D()))
@@ -416,7 +422,9 @@ func runRun(args []string) int {
 	}
 
 	logf("window closed — stopping generators")
+	mark(*intake, "measurement window closed")
 	c.run(ctx, append([]string{"stop"}, enabled...)...)
+	mark(*intake, "generators stopped, draining")
 	hadFaults := len(p.Faults) > 0
 	if hadFaults {
 		logf("draining for the full %s (faults were injected: the agent's retry backoff can be long)", p.Drain)
@@ -424,6 +432,7 @@ func runRun(args []string) int {
 		logf("draining for up to %s (until everything arrived or the intake goes quiet)", p.Drain)
 	}
 	drainUntilQuiet(ctx, *intake, p.Drain.D(), hadFaults, logf)
+	mark(*intake, "drain finished")
 
 	// Collect.
 	r, err := fetchReportFor(*intake, sanitize(*name))
@@ -461,14 +470,30 @@ func runRun(args []string) int {
 	if !*keep {
 		c.run(context.Background(), "down", "-v", "--remove-orphans")
 	} else {
-		logf("stack left running (--keep); dashboard at %s", *intake)
+		logf("stack left running (--keep); intake at %s", *intake)
 	}
-	fmt.Fprintf(os.Stderr, "\nresults in %s (report.md, report.json, timeseries.csv, agent-status.txt, agent.log)\n\n", resultsDir)
+	nbRes, nbErr := makeNotebook(context.Background(), []*report.Report{r}, notebook.Options{Site: *ddSite}, filepath.Join(resultsDir, "notebook.json"), ddapi.FromEnv(), !*mkNotebook)
+	fmt.Fprintf(os.Stderr, "\nresults in %s (report.md, report.json, timeseries.csv, notebook.json, agent-status.txt, agent.log)\n\n", resultsDir)
 	printVerdict(r)
+	switch {
+	case nbErr != nil:
+		fmt.Fprintf(os.Stderr, "notebook: %v\n", nbErr)
+	case nbRes.URL != "":
+		fmt.Printf("notebook: %s\n", nbRes.URL)
+	case *mkNotebook:
+		fmt.Printf("notebook: DD_APP_KEY not set — wrote %s; create it with `aoc notebook --results %s` or the Datadog MCP\n", nbRes.File, resultsDir)
+	}
 	if r.Delivery.Missing > 0 || r.Delivery.Duplicates > 0 {
 		return 3
 	}
 	return 0
+}
+
+// mark posts an annotation event through the intake (a no-op without Datadog).
+func mark(intake, text string) {
+	if resp, err := http.Post(intake+"/harness/mark?text="+url.QueryEscape(text), "", nil); err == nil {
+		resp.Body.Close()
+	}
 }
 
 func orDefault(s, d string) string {
@@ -540,30 +565,22 @@ func waitAgent(ctx context.Context, c *compose, timeout time.Duration, logf func
 	return fmt.Errorf("agent did not become healthy within %s: %v", timeout, lastErr)
 }
 
-type statsLive struct {
-	Live struct {
-		Generators []struct {
-			Name  string `json:"name"`
-			Final bool   `json:"final"`
-		} `json:"generators"`
-		Recent struct {
-			RecvLogs float64 `json:"recv_logs_per_sec"`
-		} `json:"recent"`
-	} `json:"live"`
-	Report struct {
-		Delivery struct {
-			Missing int64 `json:"missing"`
-		} `json:"delivery"`
-	} `json:"report"`
+type intakeStatus struct {
+	Generators []struct {
+		Name  string `json:"name"`
+		Final bool   `json:"final"`
+	} `json:"generators"`
+	RecentLogsPerSec float64 `json:"recent_logs_per_sec"`
+	Missing          int64   `json:"missing"`
 }
 
-func getStats(url string) (*statsLive, error) {
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(url + "/harness/stats")
+func getStats(url string) (*intakeStatus, error) {
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(url + "/harness/status")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var s statsLive
+	var s intakeStatus
 	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
 		return nil, err
 	}
@@ -573,8 +590,8 @@ func getStats(url string) (*statsLive, error) {
 func waitGenerators(ctx context.Context, url string, n int, timeout time.Duration, logf func(string, ...any)) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if s, err := getStats(url); err == nil && len(s.Live.Generators) >= n {
-			logf("%d generator(s) reporting to the intake", len(s.Live.Generators))
+		if s, err := getStats(url); err == nil && len(s.Generators) >= n {
+			logf("%d generator(s) reporting to the intake", len(s.Generators))
 			return nil
 		}
 		if !sleepCtx(ctx, time.Second) {
@@ -599,23 +616,23 @@ func drainUntilQuiet(ctx context.Context, url string, max time.Duration, hadFaul
 		if err != nil {
 			continue
 		}
-		allFinal := len(s.Live.Generators) > 0
-		for _, g := range s.Live.Generators {
+		allFinal := len(s.Generators) > 0
+		for _, g := range s.Generators {
 			if !g.Final {
 				allFinal = false
 			}
 		}
-		if allFinal && s.Report.Delivery.Missing == 0 {
+		if allFinal && s.Missing == 0 {
 			logf("drained: everything delivered")
 			return
 		}
-		if s.Live.Recent.RecvLogs == 0 {
+		if s.RecentLogsPerSec == 0 {
 			quiet++
 		} else {
 			quiet = 0
 		}
 		if allFinal && quiet >= 10 && !hadFaults {
-			logf("drained: intake quiet for 10 s, %d record(s) still missing", s.Report.Delivery.Missing)
+			logf("drained: intake quiet for 10 s, %d record(s) still missing", s.Missing)
 			return
 		}
 	}

@@ -268,3 +268,68 @@ func sortedKeys(m map[string]int64) []string {
 	sort.Strings(ks)
 	return ks
 }
+
+// Summary is the short findings block used at the top of a notebook:
+// what ran, whether it delivered, and the headline numbers.
+func Summary(r *Report) string {
+	var b strings.Builder
+	p := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
+	d, t, l, res := r.Delivery, r.Throughput, r.Latency, r.Resources
+	agent := keys(r.Agent.Versions)
+	if r.Agent.Image != "" {
+		agent += " (`" + r.Agent.Image + "`)"
+	}
+	p("**Agent** %s · **window** %s → %s UTC (%s) · **encodings** %s\n\n",
+		agent, r.WindowStart.UTC().Format("2006-01-02 15:04:05"), r.WindowEnd.UTC().Format("15:04:05"),
+		fmtutil.Duration(time.Duration(r.Seconds*float64(time.Second))), keys(r.Agent.Encodings))
+	var gens []string
+	for _, g := range r.Generators {
+		rate := "flat out"
+		if g.TargetRate > 0 {
+			rate = fmtutil.Rate(g.TargetRate)
+		}
+		gens = append(gens, fmt.Sprintf("`%s` %s→%s, %d streams @ %s, rotate %s×%d (%s)", g.Name, g.Format, g.Output, g.ActiveStreams, rate, fmtutil.Bytes(g.RotateBytes), g.RotateKeep, g.RotateMode))
+	}
+	if len(gens) > 0 {
+		p("**Workload** %s\n\n", strings.Join(gens, "; "))
+	}
+	verdict := "✅ every record delivered exactly once"
+	switch {
+	case d.GeneratedRecords == 0:
+		verdict = "⚠️ no generator counters were received"
+	case d.Missing > 0 && d.Duplicates > 0:
+		verdict = fmt.Sprintf("❌ %s records lost and %s duplicated", fmtutil.Int(d.Missing), fmtutil.Int(d.Duplicates))
+	case d.Missing > 0:
+		verdict = fmt.Sprintf("❌ %s records lost (%s delivered)", fmtutil.Int(d.Missing), pctOf(d.Unique, d.GeneratedRecords))
+	case d.Duplicates > 0:
+		verdict = fmt.Sprintf("⚠️ nothing lost, but %s duplicates", fmtutil.Int(d.Duplicates))
+	}
+	if !d.AllFinal && d.Missing > 0 {
+		verdict += " — generators were still running, so some of this may be in flight"
+	}
+	p("### Delivery: %s\n\n", verdict)
+	p("| | |\n|---|---|\n")
+	p("| written / unique delivered | %s / %s (%s) |\n", fmtutil.Int(d.GeneratedRecords), fmtutil.Int(d.Unique), pctOf(d.Unique, d.GeneratedRecords))
+	p("| lost · duplicates · out of order · orphan lines | %s · %s · %s · %s |\n", fmtutil.Int(d.Missing), fmtutil.Int(d.Duplicates), fmtutil.Int(d.OutOfOrder), fmtutil.Int(d.Orphans))
+	p("| multiline received / traces written · truncated | %s / %s · %s |\n", fmtutil.Int(d.Multiline), fmtutil.Int(d.MultilineWritten), fmtutil.Int(d.Truncated))
+	p("| throughput | generated %s, received %s, wire %s (%.1f× compression), peak %s |\n", fmtutil.Rate(t.GenRecordsPerSec), fmtutil.Rate(t.RecvLogsPerSec), fmtutil.BytesF(t.RecvWireBytesPerSec)+"/s", t.CompressionRatio, fmtutil.Rate(float64(t.PeakRecvLogsPerSec)))
+	p("| latency written → intake p50 / p99 / max | %s / %s / %s |\n", secs(l.EndToEnd.P50), secs(l.EndToEnd.P99), secs(l.EndToEnd.Max))
+	p("| sender latency p50 / p99 | %s / %s |\n", secs(l.Sender.P50), secs(l.Sender.P99))
+	if res.ContainerCPUMax > 0 {
+		p("| agent container CPU avg / max · memory avg / max | %.0f%% / %.0f%% · %s / %s |\n", res.ContainerCPUAvg, res.ContainerCPUMax, fmtutil.Bytes(res.ContainerMemAvg), fmtutil.Bytes(res.ContainerMemMax))
+	}
+	if res.ProcessCPUMax > 0 {
+		p("| core agent process CPU avg / max · RSS max · CPU-s per 1M logs | %.0f%% / %.0f%% · %s · %.2f |\n", res.ProcessCPUAvg, res.ProcessCPUMax, fmtutil.Bytes(res.ProcessRSSMax), res.CPUSecondsPerMLogs)
+	}
+	p("| tags per log · tag bytes per log · unique keys | %.2f · %.0f B · %d |\n", r.Tags.AvgTagsPerLog, r.Tags.AvgTagBytesPerLog, r.Tags.UniqueKeys)
+	if len(r.Faults) > 0 {
+		p("\n**Faults**\n\n")
+		for _, f := range r.Faults {
+			p("- %s — %s\n", f.At.UTC().Format("15:04:05"), f.Desc)
+		}
+	}
+	for _, n := range r.Notes {
+		p("\n> %s\n", n)
+	}
+	return b.String()
+}

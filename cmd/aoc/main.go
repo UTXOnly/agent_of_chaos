@@ -1,6 +1,6 @@
 // Command aoc is the agent_of_chaos Datadog logs-agent testing harness:
-// a log generator, a fake logs intake with a live dashboard, and an
-// experiment runner that turns a run into a comparable report.
+// a log generator, a fake logs intake that reports to Datadog, and an
+// experiment runner that turns a run into a report and a Datadog notebook.
 package main
 
 import (
