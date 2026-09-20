@@ -141,6 +141,19 @@ b:
 #   DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
 
 ##################################
+## The code
+##################################
+
+## @param source - string - optional - default: $DATADOG_AGENT_SRC, else ../datadog-agent
+## A checkout of the agent's repository. The profiler tags every upload
+## with the build's commit, so with a checkout that has both commits the
+## brief can say, for each function the profiles flagged, whether its file
+## changed between the two builds — and the investigation can open it
+## (`git -C <source> show <commit>:<file>`).
+#
+# source: ~/src/datadog-agent
+
+##################################
 ## Output
 ##################################
 

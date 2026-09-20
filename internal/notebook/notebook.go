@@ -12,13 +12,8 @@ import (
 
 	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
 	"github.com/UTXOnly/agent_of_chaos/internal/findings"
-	"github.com/UTXOnly/agent_of_chaos/internal/prof"
 	"github.com/UTXOnly/agent_of_chaos/internal/report"
 )
-
-func profFormat(v float64, unit string) string { return prof.Format(v, unit) }
-func profDelta(v float64, unit string) string  { return prof.FormatDelta(v, unit) }
-func shortFunc(name string) string             { return prof.ShortFunc(name) }
 
 // Cell is a raw notebook cell ({"type":"notebook_cells","attributes":{...}}).
 type Cell map[string]any
@@ -290,12 +285,13 @@ func ForCompare(reports []*report.Report, o Options) *Notebook {
 	return nb
 }
 
-// ForAB builds the notebook of an A/B test. It leads with the findings —
-// what regressed and the evidence behind it, cell by cell — then the
-// profiler links, then the charts with all runs overlaid. The runs
-// happened one after the other, so each earlier run is time-shifted onto
-// the window of the latest one (the anchor) and the cells are pinned to
-// that window. The full metric table closes the notebook.
+// ForAB builds the notebook of an A/B test, in the order an investigation
+// reads it: what was tested and what differed; the conclusion once there
+// is one; one cell per topic that regressed, with its evidence; the
+// profiles diffed by function and located in the code, with each side's
+// flame graph embedded; then only the charts that bear on what moved, all
+// runs overlaid (each earlier run time-shifted onto the latest one's
+// window, to which the cells are pinned).
 func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	o.defaults()
 	if o.Name != "" {
@@ -316,7 +312,7 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		}
 	}
 	if len(runs) == 0 {
-		return &Notebook{Name: truncate(title, 80), Type: "report"}
+		return &Notebook{Name: truncate(title, 80), Type: "investigation"}
 	}
 	anchor, first := runs[0].r, runs[0].r
 	var longest time.Duration
@@ -333,95 +329,61 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	}
 	start, end := anchor.WindowStart.Add(-o.Margin), anchor.WindowStart.Add(longest).Add(o.Margin)
 	nb := &Notebook{Name: truncate(title, 80), Type: "investigation", Start: start, End: end}
+	f := o.Findings
+	in := findings.Input{Experiment: o.Experiment, Cols: cols, AppURL: o.AppURL, Margin: o.Margin}
 
-	// 1. Who was compared, and the verdict.
+	// 1. What we tested, what differed.
 	var head strings.Builder
-	for _, c := range cols {
-		r := c.Runs[0]
-		fmt.Fprintf(&head, "- **%s** — agent %s", c.Name, report.AgentLabel(r))
-		if r.Agent.Digest != "" {
-			fmt.Fprintf(&head, ", digest `%s`", r.Agent.Digest)
-		}
-		var windows []string
-		for _, x := range c.Runs {
-			windows = append(windows, fmt.Sprintf("`run:%s` %s → %s UTC", x.Name, x.WindowStart.UTC().Format("15:04:05"), x.WindowEnd.UTC().Format("15:04:05")))
-		}
-		fmt.Fprintf(&head, "; %s\n", strings.Join(windows, ", "))
-	}
-	if f := o.Findings; f != nil {
-		fmt.Fprintf(&head, "\n## Verdict (threshold ±%.0f%%)\n\n", f.Threshold)
+	if f != nil {
+		fmt.Fprintf(&head, "## What we tested\n\n%s\n\n## What differed (threshold ±%.0f%%)\n\n", f.Tested, f.Threshold)
 		for _, v := range f.Verdict {
 			fmt.Fprintf(&head, "- %s\n", v)
+		}
+		if t := findings.ChangedTable(f, cols); t != "" {
+			fmt.Fprintf(&head, "\n%s", t)
+		}
+	} else {
+		for _, c := range cols {
+			fmt.Fprintf(&head, "- **%s** — agent %s\n", c.Name, report.AgentLabel(c.Runs[0]))
 		}
 	}
 	nb.Cells = append(nb.Cells, markdown(head.String()))
 
-	// 2. One cell per topic with a regression: the evidence.
-	if f := o.Findings; f != nil {
-		printed := map[string]bool{}
-		for _, fd := range f.Findings {
-			if fd.Kind == "improvement" || printed[fd.Topic] {
-				continue
+	// 2. The conclusion, when the investigation has been done.
+	if f != nil && f.Conclusion != "" {
+		nb.Cells = append(nb.Cells, markdown("## Conclusion\n\n"+f.Conclusion+"\n"))
+	}
+
+	// 3. One cell per topic that moved.
+	var topics []string
+	if f != nil {
+		for i, sec := range f.Sections {
+			text := findings.SectionMarkdown(sec)
+			if i == 0 {
+				text = "## Where\n\n" + text
 			}
-			printed[fd.Topic] = true
-			var cell strings.Builder
-			var lines []string
-			for _, g := range f.Findings {
-				if g.Topic == fd.Topic && g.Kind == fd.Kind {
-					lines = append(lines, fmt.Sprintf("%s %s → %s (%s)", g.Metric, g.A, g.B, g.Delta))
-				}
-			}
-			kind := "Regression"
-			if fd.Kind == "attention" {
-				kind = "Present on both sides"
-			}
-			fmt.Fprintf(&cell, "## %s — %s\n\n%s\n\n", kind, fd.Topic, strings.Join(lines, "; "))
-			for _, ev := range f.Evidence[fd.Topic] {
-				fmt.Fprintf(&cell, "**%s**\n\n%s\n", ev.Title, ev.Markdown)
-			}
-			if next := f.Next[fd.Topic]; len(next) > 0 {
-				cell.WriteString("**Next**\n\n")
-				for _, n := range next {
-					fmt.Fprintf(&cell, "- %s\n", n)
-				}
-			}
-			nb.Cells = append(nb.Cells, markdown(cell.String()))
-		}
-		var imps []string
-		for _, g := range f.Findings {
-			if g.Kind == "improvement" {
-				imps = append(imps, fmt.Sprintf("%s %s → %s (%s)", g.Metric, g.A, g.B, g.Delta))
-			}
-		}
-		if len(imps) > 0 {
-			nb.Cells = append(nb.Cells, markdown("## Improvements\n\n- "+strings.Join(imps, "\n- ")+"\n"))
+			nb.Cells = append(nb.Cells, markdown(text))
+			topics = append(topics, sec.Topic)
 		}
 	}
 
-	// 3. The profiles: per-function diffs and where to click.
-	var prof strings.Builder
-	prof.WriteString("## Profiles\n\n")
-	if f := o.Findings; f != nil && len(f.Profiles) > 0 {
-		prof.WriteString("The core agent's continuous-profiler uploads, merged over each window and diffed by function (rates per wall-clock second, CPU as % of one core; levels averaged over the periods). Largest movers first.\n\n")
-		for _, d := range f.Profiles {
-			fmt.Fprintf(&prof, "**%s** — `%s`: %s → %s\n\n| function (flat) | %s | %s | Δ |\n|---|---|---|---|\n", d.Label, d.Service, profFormat(d.ATotal, d.Unit), profFormat(d.BTotal, d.Unit), cols[0].Name, cols[1].Name)
-			n := 0
-			for _, r := range d.Rows {
-				if n++; n > 8 {
-					break
-				}
-				fmt.Fprintf(&prof, "| `%s` | %s | %s | %s |\n", shortFunc(r.Function), profFormat(r.A, d.Unit), profFormat(r.B, d.Unit), profDelta(r.Delta, d.Unit))
-			}
-			prof.WriteString("\n")
+	// 4. The profiles and the code behind the movers, then each side's
+	// flame graph (same-origin iframe of the profiler, scoped to the run).
+	if f != nil {
+		var pc strings.Builder
+		pc.WriteString("## Profiles\n\n" + findings.ProfilesMarkdown(f, in))
+		if c := findings.CodeMarkdown(f); c != "" {
+			pc.WriteString("\n## Code\n\n" + c)
 		}
-	} else {
-		prof.WriteString("No profiler uploads were captured on both sides; the links below still open whatever the agent uploaded.\n\n")
+		nb.Cells = append(nb.Cells, markdown(pc.String()))
 	}
-	prof.WriteString("Flame graphs in Datadog (scoped to each run's tag and window; pick CPU, heap live size or allocations there, or press ⇄ Compare on one and choose the other run as A):\n\n")
-	prof.WriteString(findings.ProfileLinks(cols, o.AppURL, o.Margin))
-	nb.Cells = append(nb.Cells, markdown(prof.String()))
+	for _, c := range cols {
+		if len(c.Runs) > 0 {
+			nb.Cells = append(nb.Cells, iframe(findings.ProfileURL(c.Runs[0], o.AppURL, o.Margin)))
+		}
+	}
 
-	// 4. The session in real time, then the overlaid charts.
+	// 5. The session in real time, then the charts that bear on what moved.
 	if o.Experiment != "" {
 		sc := "experiment:" + o.Experiment
 		span := timeseries("Timeline: the runs as they happened (records/s by variant)",
@@ -429,8 +391,7 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 			first.WindowStart.Add(-o.Margin), latestEnd(cols).Add(o.Margin), "records/s")
 		nb.Cells = append(nb.Cells, span)
 	}
-	nb.Cells = append(nb.Cells, markdown(fmt.Sprintf("## Charts\n\nEvery chart overlays the runs on one time axis: `%s` is drawn at its real time and each earlier run is shifted forward onto it with `timeshift`, so the same second of the measured window lines up. Legends carry the side (and `run` for grouped series).", anchor.Name)))
-	for _, i := range abCharts {
+	for _, i := range chartsFor(topics) {
 		c := runCharts[i]
 		var qs []query
 		for _, x := range runs {
@@ -441,14 +402,47 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		}
 		nb.Cells = append(nb.Cells, timeseries(c.title, qs, start, end, c.unit))
 	}
-
-	// 5. Everything else.
-	var tail strings.Builder
-	tail.WriteString("## All metrics\n\nMedians when a side ran more than once.\n\n")
-	tail.WriteString(strings.TrimPrefix(report.CompareColumns(cols), "# aoc compare\n\n"))
-	nb.Cells = append(nb.Cells, markdown(tail.String()))
-	nb.Cells = append(nb.Cells, markdown(digDeeperAB(cols, &o)))
+	nb.Cells = append(nb.Cells, markdown(digDeeperAB(cols, &o, anchor)))
 	return nb
+}
+
+// topicCharts are the runCharts that bear on each topic.
+var topicCharts = map[string][]int{
+	"memory":    {6, 14, 15},
+	"cpu":       {5},
+	"latency":   {2, 9},
+	"delivery":  {0, 1},
+	"bytes":     {7},
+	"tags":      {7},
+	"stability": {5, 6},
+}
+
+// chartsFor picks the charts for the topics that moved; with nothing
+// moving, the agent's CPU and memory.
+func chartsFor(topics []string) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, t := range topics {
+		for _, i := range topicCharts[t] {
+			if !seen[i] {
+				seen[i] = true
+				out = append(out, i)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return []int{5, 6}
+	}
+	return out
+}
+
+// iframe embeds a same-origin Datadog page (the profiler allows framing
+// from its own origin) as a tall cell.
+func iframe(url string) Cell {
+	return Cell{"type": "notebook_cells", "attributes": map[string]any{
+		"definition": map[string]any{"type": "iframe", "url": url},
+		"graph_size": "xl",
+	}}
 }
 
 // latestEnd is the latest window end across all columns.
@@ -483,27 +477,23 @@ func shifted(q query, label string, delta time.Duration) query {
 	return out
 }
 
-func digDeeperAB(cols []report.Column, o *Options) string {
+func digDeeperAB(cols []report.Column, o *Options, anchor *report.Report) string {
 	app := o.AppURL
 	var b strings.Builder
-	fmt.Fprintf(&b, "### Dig deeper\n\n")
+	fmt.Fprintf(&b, "### Notes\n\n")
+	fmt.Fprintf(&b, "The charts overlay the runs on one time axis: `%s` is drawn at its real time and each earlier run is shifted forward onto it with `timeshift`, so the same second of the measured window lines up.", anchor.Name)
 	if o.Experiment != "" {
-		fmt.Fprintf(&b, "Every run of this test carries `experiment:%s` and `variant:<side>` on its `%s.*` metrics, events and on the agent's own metrics and profiles, so `… {experiment:%s} by {variant}` puts the sides on one chart at their real times. Per run:\n\n", o.Experiment, o.Prefix, o.Experiment)
+		fmt.Fprintf(&b, " Every run carries `experiment:%s` and `variant:<side>` on its `%s.*` metrics, events and the agent's own metrics and profiles.", o.Experiment, o.Prefix)
 	}
+	b.WriteString("\n\n")
 	for _, c := range cols {
 		for _, r := range c.Runs {
 			from, to := r.WindowStart.Add(-o.Margin).UnixMilli(), r.WindowEnd.Add(o.Margin).UnixMilli()
 			evQ := url.QueryEscape("source:aoc run:" + r.Name)
-			profQ := url.QueryEscape("service:datadog-agent run:" + r.Name)
-			fmt.Fprintf(&b, "- **%s** `run:%s` (%s): [events](%s/event/explorer?query=%s&from_ts=%d&to_ts=%d) · [agent profiles](%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true)\n",
-				c.Name, r.Name, report.AgentLabel(r), app, evQ, from, to, app, profQ, from, to)
+			fmt.Fprintf(&b, "- **%s** `run:%s` %s → %s UTC: [events](%s/event/explorer?query=%s&from_ts=%d&to_ts=%d)\n", c.Name, r.Name, r.WindowStart.UTC().Format("15:04:05"), r.WindowEnd.UTC().Format("15:04:05"), app, evQ, from, to)
 		}
 	}
-	if len(cols) > 1 && len(cols[0].Runs) > 0 && len(cols[1].Runs) > 0 {
-		a, bb := cols[0].Runs[0].Name, cols[1].Runs[0].Name
-		fmt.Fprintf(&b, "\nAsk the Datadog MCP: \"compare `%s.agent.process.cpu_percent` and `%s.intake.latency.e2e.p99` between `run:%s` and `run:%s`\", or \"show the CPU flame graph for `service:datadog-agent run:%s` filtered to `logs` frames, then the same for `run:%s`\".\n", o.Prefix, o.Prefix, a, bb, a, bb)
-	}
-	fmt.Fprintf(&b, "\n`findings.md` (this brief), `compare.md`, each run's `report.md` / `profiles/` / `agent.log`, and the `aoc.yaml` that ran are in the results directory of the test.\n")
+	fmt.Fprintf(&b, "\n`findings.md` (this brief), `compare.md` (every metric), each run's `report.md` / `profiles/` / `agent.log`, and the `aoc.yaml` that ran are in the results directory.\n")
 	return b.String()
 }
 

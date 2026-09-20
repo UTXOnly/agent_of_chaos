@@ -62,10 +62,10 @@ an **investigation brief** rather than a wall of metrics:
 
 | file | what |
 |---|---|
-| `findings.md` | **the brief.** Verdict; each regression (a headline metric that moved more than `threshold`, 10 % by default) with the evidence that explains it — container memory split into anon vs page cache, every process's RSS/CPU, the agent's own CPU/heap/allocation profiles diffed **function by function**, pipeline utilization, retries, the agent log's repeated errors — and "Next" lines with the exact Datadog MCP calls for the level below; then the improvements, the profile diffs, the headline table |
+| `findings.md` | **the brief.** What we tested (images, versions, commits, what only one side had, the workload); what differed (regressions beyond `threshold`, 10 % by default, improvements, and only the rows that moved); where — per regressed topic a one-sentence reading derived from the numbers ("the container grew through page cache, not process memory"), the tables that explain it (anon vs page cache, processes that moved, the agent's own CPU/heap/allocation profiles diffed **function by function** with each mover's `file:line`), pipeline utilization, retries, the log's repeated errors; the profiles; and **the code** — each mover located in the agent's source at the tested commit, with whether its file changed between the two builds (given a checkout, `source:`). Your conclusion goes on top once you have one |
 | `compare.md` | every metric side by side, the per-process table, the agent's telemetry counters |
 | `ab.json`, `findings.json` | the same for tooling: images, digests, versions, windows, findings, file paths, notebook URL |
-| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the Datadog notebook in the same order: brief first, profiler links, then delivery/latency/CPU/memory charts with **both agents overlaid** (the earlier run `timeshift`ed onto the later one), the table last |
+| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the Datadog notebook in the same order — tested, differed, conclusion, where, profiles and code — with each side's **profiler embedded** (same-origin iframe of the flame graph explorer, scoped to the run) and only the charts that bear on what moved, **both agents overlaid** (the earlier run `timeshift`ed onto the later one) |
 | `a/`, `b/` (`a-2/`, `b-2/`, …) | a full [run directory](#what-a-run-writes) per side and round, including `profiles/` — the agent's pprof uploads over the window |
 | `aoc.yaml` | the config that ran |
 
@@ -89,52 +89,50 @@ aoc ab --duration 2m          # a quick smoke of the config
 aoc ab --only b               # rebuilt the dev image: re-run b, reuse a's results
 aoc ab --compare-only         # re-render the brief / the notebook from what is on disk
 aoc ab --config tests/rotation.yaml --runs 2 --threshold 5
-aoc conclude --results results/rotation --verdict pass "…"
+aoc conclude --results results/rotation --verdict pass "…"   # → conclusion.md, an event, the notebook's first cell
 ```
 
-The terminal ends with the verdict and the headline; the brief has the
-rest. From a 2½-minute smoke of the log tag-filter build against the
-release (`a` named `release`, `b` named `tagfilter`):
+The terminal ends with what differed and the one-sentence reading per
+regression; the brief has the rest. From a 2½-minute smoke of the log
+tag-filter build against the release:
 
 ```
-aoc ab smoke2 — 7.83.2 (datadog/agent:7@29baa94e0a1a) vs 7.85.0-devel+git.404.9e35a50 (datadog/agent-dev:log-tag-filtering-9e35a50b-full@e6f1b0aac73d)
-
-  ⚠️ 2 regression(s): agent container mem max +16.3% ⚠️; compression ratio -13.2% ⚠️
-  ✅ 5 improvement(s): core agent Go heap in use -22.8% ✅; core agent RSS max -10.6% ✅; agent container anon mem max -10.0% ✅; tag bytes per log -67.1% ✅; tags per log -49.7% ✅
-  👀 present on both sides (workload or harness, not the change): out of order +1.1% ⚠️
-  delivery 100.00% vs 100.00%; lost 0 vs 0; duplicates 0 vs 0
-  …
-  findings: results/smoke2/findings.md   (evidence per regression; compare.md has every metric)
+  ⚠️ 2 regression(s): agent container mem max 553.3 MB → 643.2 MB (+16.3% ⚠️); compression ratio 20.82× → 18.07× (-13.2% ⚠️)
+  ✅ 5 improvement(s): core agent Go heap in use 87.7 MB → 67.8 MB (-22.8% ✅); core agent RSS max … ; tag bytes per log 119.3 B → 39.3 B (-67.1% ✅); tags per log 4.05 → 2.04 (-49.7% ✅)
+  memory: The container grew through page cache (file 308.4 MB → 410.7 MB), not process memory (anon 199.0 MB → 179.0 MB): files read, not a leak. Not a regression.
+  bytes: The compression ratio fell because the bytes removed (tags, −80 B per log) were the most repetitive ones; bytes on the wire still went 248.2 kB/s → 242.1 kB/s (-2.4%). Not a regression.
 ```
 
-and `findings.md` explains the memory row before anyone opens a flame graph:
+and `findings.md` goes from the numbers to the code:
 
 ```
+## What we tested
+release = 7.83.2 (datadog/agent:7@29baa94e0a1a), commit 1183252e · tagfilter = 7.85.0-devel+git.404.9e35a50
+(datadog/agent-dev:log-tag-filtering-9e35a50b-full@e6f1b0aac73d), commit 9e35a50b. Only tagfilter has
+DD_LOGS_CONFIG_TAG_FILTERS={"exclude":["env:*","dirname:*","filename:*"]}. Workload baseline — 16 streams
+at 9,862/s, 2m32s window, 1 round per side. Delivery 100.00% vs 100.00%, lost 0 vs 0, duplicates 0 vs 0.
+
+## Where
 ### Memory — agent container mem max 553.3 MB → 643.2 MB (+16.3% ⚠️)
+The container grew through page cache (file 308 → 411 MB), not process memory (anon 199 → 179 MB) …
+| container memory max | 553.3 MB | 643.2 MB | +16.3% ⚠️ |
+| ├ anon: the processes' own memory | 199.0 MB | 179.0 MB | -10.0% ✅ |
+| ├ file: page cache charged to the container | 308.4 MB | 410.7 MB | +33.2% |
 
-| | release | tagfilter | Δ |
-|---|---|---|---|
-| container memory max (usage − inactive file cache) | 553.3 MB | 643.2 MB | +16.3% ⚠️ |
-| ├ anon: the processes' own memory (max)            | 199.0 MB | 179.0 MB | -10.0% ✅ |
-| ├ file: page cache charged to the container (max)  | 308.4 MB | 410.7 MB | +33.2% |
-| core agent process RSS max                          | 251.3 MB | 224.6 MB | -10.6% ✅ |
-| core agent Go heap in use (end of window)           |  87.7 MB |  67.8 MB | -22.8% ✅ |
+## Profiles
+allocation rate — 22.6 MB/s → 23.1 MB/s (+448.5 kB/s)
+| tagfilter.(*Scoped).Keep | comp/logs-library/tagfilter/tagfilter.go:364 | 0 B/s | 395.2 kB/s | +395.2 kB/s |
 
-Reading: the container grew through page cache (file 308.4 MB → 410.7 MB), not process
-memory (anon 199.0 MB → 179.0 MB) — files read, not a leak; the kernel reclaims it under pressure.
-
-| process       | release RSS max | tagfilter RSS max | Δ RSS   |
-| `agent`       | 232.1 MB        | 216.9 MB          | -6.6% ✅ |
-| `trace-agent` |  55.4 MB        |  53.4 MB          | -3.7% ✅ |
-…
-Core agent allocation rate, by function       release     tagfilter   Δ
-  `tagfilter.(*Scoped).Keep`                  0 B/s       395.2 kB/s  +395.2 kB/s
-  `zstd.(*Writer).Write`                      1.2 MB/s    1.6 MB/s    +403.1 kB/s
+## Code
+| function                 | view            | Δ           | source                                       | changed a → b |
+| tagfilter.(*Scoped).Keep | allocation rate | +395.2 kB/s | comp/logs-library/tagfilter/tagfilter.go:364 | new in b      |
 ```
 
-(The earlier 40-second smoke had reported "+162 % container memory" for
-the same build; it was this page cache.)
-
+From there the investigation is `git show 9e35a50b:comp/logs-library/tagfilter/tagfilter.go`
+around line 364, and the conclusion — what the difference is, where, and what
+to change — goes on top of the brief and the notebook with `aoc conclude`.
+(The earlier 40-second smoke had reported "+162 % container memory" for the
+same build; it was this page cache.)
 
 ### For coding agents
 

@@ -144,11 +144,15 @@ var Kinds = []Kind{
 	{"mutex.pprof", "delay", true, "mutex wait (goroutine-seconds per second)", "", 1 / 1e9},
 }
 
-// Row is one function's share of a profile.
+// Row is one function's share of a profile. File and Line are where the
+// heaviest leaf sample of the function was taken.
 type Row struct {
 	Function string
+	File     string
+	Line     int64
 	Flat     float64 // samples whose leaf frame is this function
 	Cum      float64 // samples with this function anywhere on the stack
+	lineW    float64 // weight behind File/Line
 }
 
 // Analysis is one Kind over a set of captures.
@@ -243,7 +247,12 @@ func analyze(service string, caps []Capture, k Kind) *Analysis {
 			continue
 		}
 		leaf := fnName(s.Location[0], true)
-		a.row(leaf).Flat += v
+		lr := a.row(leaf)
+		lr.Flat += v
+		if v > lr.lineW {
+			lr.File, lr.Line, lr.lineW = leafPos(s.Location[0])
+			lr.lineW = v
+		}
 		seen := map[string]bool{}
 		for _, loc := range s.Location {
 			for _, ln := range loc.Line {
@@ -287,6 +296,14 @@ func (a *Analysis) row(name string) *Row {
 		a.Rows[name] = r
 	}
 	return r
+}
+
+// leafPos is the file and line of a location's innermost frame.
+func leafPos(loc *profile.Location) (string, int64, float64) {
+	if len(loc.Line) == 0 || loc.Line[0].Function == nil {
+		return "", 0, 0
+	}
+	return loc.Line[0].Function.Filename, loc.Line[0].Line, 0
 }
 
 func idx(p *profile.Profile, sampleType string) int {
@@ -336,7 +353,7 @@ func (a *Analysis) Top(n int) []Row {
 func (a *Analysis) Summary(n int) report.ProfileSummary {
 	s := report.ProfileSummary{Service: a.Service, File: a.Kind.File, SampleType: a.Kind.SampleType, Label: a.Kind.Label, Unit: a.Kind.Unit, Captures: a.Captures, WallSeconds: a.Wall, Total: a.Total}
 	for _, r := range a.Top(n) {
-		s.Top = append(s.Top, report.Frame{Function: r.Function, Flat: r.Flat, Cum: r.Cum})
+		s.Top = append(s.Top, report.Frame{Function: r.Function, File: r.File, Line: r.Line, Flat: r.Flat, Cum: r.Cum})
 	}
 	return s
 }
@@ -350,9 +367,12 @@ func Summaries(caps []Capture, n int) []report.ProfileSummary {
 	return out
 }
 
-// DiffRow is one function in two runs.
+// DiffRow is one function in two runs. File/Line come from b when it has
+// the function, else from a.
 type DiffRow struct {
 	Function string  `json:"function"`
+	File     string  `json:"file,omitempty"`
+	Line     int64   `json:"line,omitempty"`
 	A        float64 `json:"a"`
 	B        float64 `json:"b"`
 	Delta    float64 `json:"delta"`
@@ -408,7 +428,13 @@ func diff(x, y *Analysis, n int, cum bool) Diff {
 	}
 	for name := range names {
 		av, bv := val(x, name), val(y, name)
-		d.Rows = append(d.Rows, DiffRow{Function: name, A: av, B: bv, Delta: bv - av})
+		row := DiffRow{Function: name, A: av, B: bv, Delta: bv - av}
+		if r := y.Rows[name]; r != nil && r.File != "" {
+			row.File, row.Line = r.File, r.Line
+		} else if r := x.Rows[name]; r != nil {
+			row.File, row.Line = r.File, r.Line
+		}
+		d.Rows = append(d.Rows, row)
 	}
 	sort.Slice(d.Rows, func(i, j int) bool {
 		di, dj := math.Abs(d.Rows[i].Delta), math.Abs(d.Rows[j].Delta)
@@ -450,6 +476,49 @@ func FormatDelta(v float64, unit string) string {
 		return "−" + s
 	}
 	return "="
+}
+
+// RepoPath turns a pprof filename into a path relative to the module the
+// binary was built from ("/go/src/github.com/DataDog/datadog-agent/pkg/x.go"
+// or "github.com/DataDog/datadog-agent/pkg/x.go" → "pkg/x.go"). The second
+// value says where the file is: "repo" for the module, "stdlib" for Go's
+// own sources, "dep" for another module, "" when unknown.
+func RepoPath(file, module string) (string, string) {
+	if file == "" {
+		return "", ""
+	}
+	if module != "" {
+		if i := strings.Index(file, module+"/"); i >= 0 {
+			return file[i+len(module)+1:], "repo"
+		}
+	}
+	switch {
+	case strings.Contains(file, "/go/src/") && !strings.Contains(file, "/go/src/github.com/"), strings.HasPrefix(file, "$GOROOT"), strings.Contains(file, "/libexec/src/"), strings.Contains(file, "/go/pkg/mod/golang.org/toolchain"):
+		i := strings.LastIndex(file, "/src/")
+		if i >= 0 {
+			return file[i+5:], "stdlib"
+		}
+		return file, "stdlib"
+	case strings.Contains(file, "/pkg/mod/"), strings.Contains(file, "/vendor/"):
+		i := strings.LastIndex(file, "/pkg/mod/")
+		if i >= 0 {
+			return file[i+9:], "dep"
+		}
+		return file, "dep"
+	}
+	// Module-relative already (trimpath builds) — a Go file path with no
+	// leading slash that does not look like a stdlib package.
+	if !strings.HasPrefix(file, "/") && strings.Contains(file, ".") && !strings.Contains(strings.SplitN(file, "/", 2)[0], ".") {
+		return file, "stdlib"
+	}
+	return file, ""
+}
+
+// Module is the module path of a Go function name
+// (github.com/DataDog/datadog-agent/pkg/logs/sender.(*Sender).run →
+// github.com/DataDog/datadog-agent when the name starts with that module).
+func InModule(function, module string) bool {
+	return module != "" && strings.HasPrefix(function, module+"/") || function == module
 }
 
 // ShortFunc trims a Go function name for tables: the package path is cut to

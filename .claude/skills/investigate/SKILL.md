@@ -6,10 +6,13 @@ description: Investigate the regressions an aoc A/B test found (memory, CPU, lat
 # From findings.md to a conclusion
 
 Input: an experiment's results directory (`results/<name>/`, with
-`ab.json` and `findings.md`). Read `findings.md` once, fully. It already
-contains: the verdict; per regression topic the tables that usually name
-the cause; per-function CPU/heap/allocation diffs from the agent's own
-profiles; "Next" lines with the exact MCP filters (run tags, time windows).
+`ab.json` and `findings.md`). Read `findings.md` once, fully. It is built
+as: what we tested → what differed (only the rows that moved) → where (one
+section per regressed topic: a one-sentence reading, the tables that
+usually name the cause, the profile diffs with the source line of each
+mover) → profiles → code (the movers located in the agent's source, with
+whether their files changed between the builds). Everything else is in
+`compare.md`; do not open it unless a number you need is missing.
 
 ## Budget
 
@@ -41,14 +44,44 @@ profiles; "Next" lines with the exact MCP filters (run tags, time windows).
   (`./bin/aoc ab --runs 2`) beats a fourth flame graph when the numbers are
   within a few percent of the threshold.
 
+## Into the code
+
+`findings.md` ends with a **Code** section: for every profile mover inside
+the agent's module, its `file:line` (from the profile), a link to that line
+at the tested commit, and — when a checkout with both commits is available
+(`source:` in `aoc.yaml`, `DATADOG_AGENT_SRC`, or `../datadog-agent`) —
+whether the file is new, changed (`+N/−M`) or unchanged between the two
+builds. Both commits come from the profiler's tags (`ab.json` sides →
+`report.json` `agent.commit`).
+
+When a regression is CPU or memory in the core agent and the mover is
+`new in b` or changed:
+
+```bash
+git -C <source> show <commit-b>:<file> | sed -n '<line-20>,<line+40>p'   # the function
+git -C <source> diff <commit-a> <commit-b> -- <file> | head -150           # what changed
+```
+
+Read only those windows, not whole files or the whole diff (a dev branch
+is often hundreds of commits past the release). Look for the usual
+causes: an allocation per message where a slice could be reused or
+filtered in place, a regexp or map built per call instead of at setup, a
+lock or channel on the hot path, work done for every tag/line that could
+be done once per source. Write the suggestion as a reviewer would: the
+function, the line, what it does per message, what to do instead, and the
+number from the profile that it should move.
+
 ## Write it down
 
 ```bash
 ./bin/aoc conclude --results results/<name> --verdict fail "container memory +160 %: a new python3 check runner (350 MB RSS) in the -full image; the logs pipeline itself is unchanged (core RSS, heap in use and CPU by function flat). Tag filters removed 67 % of tag bytes as intended."
 ```
 
-That writes `conclusion.md` and posts a `source:aoc` event tagged
-`experiment:<name>`. If the user wants it in the notebook, add one markdown
-cell at the top with the MCP's `edit_datadog_notebook` (URL in `ab.json`).
-Report the conclusion to the user in two or three sentences, with the
-numbers from the brief, and the links (notebook, any flame graph).
+That writes `conclusion.md`, posts a `source:aoc` event tagged
+`experiment:<name>` and, with `DD_APP_KEY`, puts the conclusion on top of
+the notebook (without the key: `edit_datadog_notebook` with the notebook
+URL from `ab.json`, full-replace with the existing cell ids and a new
+markdown cell first). `aoc ab --compare-only` then re-renders
+`findings.md` with the conclusion under "What we tested". Report the
+conclusion to the user in two or three sentences, with the numbers from
+the brief and the links (notebook, any flame graph the MCP returned).

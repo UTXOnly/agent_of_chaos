@@ -44,6 +44,7 @@ type ABConfig struct {
 	Notebook  *bool             `yaml:"notebook"`
 	Compose   []string          `yaml:"compose"`
 	Threshold float64           `yaml:"threshold"` // percent; a headline change below it is noise
+	Source    string            `yaml:"source"`    // a checkout of the agent's repository, for the code section
 }
 
 // Variant is one side of the test: an image and what applies to it only.
@@ -401,7 +402,16 @@ func runAB(args []string) int {
 
 	// The brief: what moved, and the evidence — per-process memory, the
 	// profiles diffed by function, telemetry, the agent's log.
-	in := findings.Input{Experiment: experiment, Cols: cols, Captures: abCaptures(cols, all), Threshold: cfg.Threshold, AppURL: ddapi.AppURLFromEnv(), ResultsDir: root}
+	workload := "`" + p.Name + "`"
+	if d := firstSentence(p.Description); d != "" {
+		workload += " (" + d + ")"
+	}
+	conclusion := ""
+	if b, err := os.ReadFile(filepath.Join(root, "conclusion.md")); err == nil {
+		conclusion = strings.TrimSpace(stripConclusionHeader(string(b)))
+	}
+	in := findings.Input{Experiment: experiment, Cols: cols, Captures: abCaptures(cols, all), Threshold: cfg.Threshold, AppURL: ddapi.AppURLFromEnv(), ResultsDir: root,
+		Workload: workload, ConfigDiff: cfg.configDiff(), Source: findings.DetectSource(cfg.Source), Conclusion: conclusion}
 	res := findings.Build(in)
 	findingsMD := findings.Markdown(res, in)
 	os.WriteFile(filepath.Join(root, "findings.md"), []byte(findingsMD), 0o644)
@@ -446,9 +456,17 @@ func runAB(args []string) int {
 	for _, v := range res.Verdict {
 		fmt.Printf("  %s\n", v)
 	}
+	for _, sec := range res.Sections {
+		if sec.Reading != "" {
+			fmt.Printf("  %s: %s\n", sec.Topic, sec.Reading)
+		}
+	}
 	fmt.Println()
-	printHeadline(cols, headline)
-	fmt.Printf("\n  findings: %s   (evidence per regression; compare.md has every metric)\n", filepath.Join(root, "findings.md"))
+	if len(res.Changed) > 0 {
+		printHeadline(cols, res.Changed)
+		fmt.Printf("  (rows that moved by 5%% or more; every metric is in compare.md)\n")
+	}
+	fmt.Printf("\n  findings: %s   (what was tested, what differed and where, the profiles and the code behind them)\n", filepath.Join(root, "findings.md"))
 	fmt.Printf("  results:  %s/ (ab.json, notebook.json, <side>/report.md, <side>/profiles/ …)\n", root)
 	switch {
 	case nbErr != nil:
@@ -479,6 +497,57 @@ func runAB(args []string) int {
 		return 3
 	}
 	return 0
+}
+
+// configDiff lists what only one side had: the per-side env, and the
+// images when their tags differ only there.
+func (c *ABConfig) configDiff() []string {
+	var out []string
+	side := func(name string, mine, other map[string]string) {
+		for _, k := range sortedStringKeys(mine) {
+			if v, ok := other[k]; !ok || v != mine[k] {
+				val := mine[k]
+				if len(val) > 80 {
+					val = val[:77] + "…"
+				}
+				out = append(out, fmt.Sprintf("only `%s` has %s=%s", name, k, val))
+			}
+		}
+	}
+	side(c.A.Name, c.A.Env, c.B.Env)
+	side(c.B.Name, c.B.Env, c.A.Env)
+	if len(c.Env) > 0 {
+		out = append(out, fmt.Sprintf("both have %s", envSummary(c.Env)[len("  env: "):]))
+	}
+	return out
+}
+
+// firstSentence trims a profile description to its first sentence, at
+// most 140 characters.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, ". "); i > 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSuffix(s, ".")
+	if len(s) > 140 {
+		s = s[:137] + "…"
+	}
+	return s
+}
+
+// stripConclusionHeader drops the "# aoc A/B … — conclusion" heading and
+// the trailing timestamp line aoc conclude writes, leaving the text.
+func stripConclusionHeader(s string) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "# aoc A/B") || (strings.HasPrefix(t, "_") && strings.HasSuffix(t, "UTC_")) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // abCaptures loads each side's profile captures (every run's, restricted
@@ -520,6 +589,9 @@ func abColumns(cfg *ABConfig, all []abRun) ([]report.Column, error) {
 			// older aoc) still have the pprof files next to them.
 			if caps, err := prof.LoadDir(r.dir); err == nil {
 				rep.Profiles = prof.Summaries(prof.Overlapping(caps, rep.WindowStart, rep.WindowEnd), 40)
+				if rep.Agent.Commit == "" {
+					rep.Agent.Commit, rep.Agent.Repo = profileTag(caps, "git.commit.sha"), profileTag(caps, "git.repository_url")
+				}
 			}
 		}
 		i := 0

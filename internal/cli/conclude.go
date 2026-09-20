@@ -78,7 +78,7 @@ func runConclude(args []string) int {
 	}
 	client := ddapi.FromEnv()
 	if !client.Configured() {
-		fmt.Println("DD_API_KEY not set: the conclusion was not posted to Datadog")
+		fmt.Println("DD_API_KEY not set (env or .env): the conclusion was not posted to Datadog")
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -94,8 +94,24 @@ func runConclude(args []string) int {
 		return fail("conclude: event: %v", err)
 	}
 	fmt.Printf("posted event \"%s\" (experiment:%s)\n", ev.Title, sum.Experiment)
-	if sum.Notebook != "" {
-		fmt.Printf("notebook: %s — add the conclusion as its first cell (Datadog MCP edit_datadog_notebook) so readers see it before the charts\n", sum.Notebook)
+	nbURL := sum.Notebook
+	if nbURL == "" {
+		if b, err := os.ReadFile(filepath.Join(*results, "notebook.url")); err == nil {
+			nbURL = strings.TrimSpace(string(b))
+		}
 	}
+	switch {
+	case nbURL == "":
+		fmt.Println("no notebook recorded for this test; `aoc ab --compare-only` (with DD_APP_KEY) creates one with the conclusion on top")
+	case client.AppKey == "":
+		fmt.Printf("notebook: %s — no DD_APP_KEY, so add the conclusion as its first cell yourself (Datadog MCP edit_datadog_notebook, or `aoc conclude` again with the key)\n", nbURL)
+	default:
+		cell := "## Conclusion\n\n" + strings.TrimSpace(text) + "\n"
+		if err := client.PrependNotebookCell(ctx, ddapi.NotebookID(nbURL), cell); err != nil {
+			return fail("conclude: notebook: %v", err)
+		}
+		fmt.Printf("notebook: %s — conclusion added as the first cell\n", nbURL)
+	}
+	fmt.Println("`aoc ab --compare-only` re-renders findings.md with the conclusion on top")
 	return 0
 }

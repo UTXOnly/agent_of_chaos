@@ -49,6 +49,8 @@ type Agent struct {
 	Image     string           `json:"image,omitempty"`
 	ImageID   string           `json:"image_id,omitempty"`  // docker image ID the container ran (aoc run)
 	Digest    string           `json:"digest,omitempty"`    // registry digest, repo@sha256:… (aoc run, pulled images)
+	Commit    string           `json:"commit,omitempty"`    // git.commit.sha the agent's profiler reported
+	Repo      string           `json:"repo,omitempty"`      // git.repository_url from the same tags
 	Container string           `json:"container,omitempty"` // docker container name observed for CPU/memory
 	Hostname  string           `json:"hostname,omitempty"`  // most common hostname in received logs
 }
@@ -259,9 +261,12 @@ type ProfileSummary struct {
 	Top         []Frame `json:"top"`
 }
 
-// Frame is one function's flat and cumulative value in a ProfileSummary.
+// Frame is one function's flat and cumulative value in a ProfileSummary,
+// with where it lives (the source file and line of the sampled leaf).
 type Frame struct {
 	Function string  `json:"function"`
+	File     string  `json:"file,omitempty"`
+	Line     int64   `json:"line,omitempty"`
 	Flat     float64 `json:"flat"`
 	Cum      float64 `json:"cum"`
 }

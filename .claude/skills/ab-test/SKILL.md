@@ -45,10 +45,11 @@ brief says which), 130 interrupted, anything else = a run failed
 cat results/<name>/findings.md
 ```
 
-Report to the user, in this order: the **Verdict** lines; each
-**Regression** with the one or two evidence rows that explain it (e.g. "anon
-memory +190 %, all of it in a new `python3` process; core agent RSS and heap
-flat"); the improvements in one line; the notebook URL from `ab.json`.
+Report to the user, in this order: what was tested (one line); the
+**What differed** lines; for each **Where** section its **reading** (the
+bold sentence — e.g. "the container grew through page cache, not process
+memory") and, if the section has one, the top mover with its source line;
+the improvements in one line; the notebook URL from `ab.json`.
 
 If there are regressions, continue with the `investigate` skill. If the
 brief says "No profiler uploads were captured", the window was shorter than

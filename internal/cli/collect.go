@@ -119,6 +119,18 @@ func collectProfiles(intakeURL, dir string, start, end time.Time) ([]prof.Captur
 	return caps, l.Status, nil
 }
 
+// profileTag returns the value of key:… in any capture's profiler tags.
+func profileTag(caps []prof.Capture, key string) string {
+	for _, c := range caps {
+		for _, t := range c.Tags {
+			if strings.HasPrefix(t, key+":") {
+				return strings.TrimPrefix(t, key+":")
+			}
+		}
+	}
+	return ""
+}
+
 // ── agent log ────────────────────────────────────────────────────────────────
 
 var (

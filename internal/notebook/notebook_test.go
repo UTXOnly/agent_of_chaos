@@ -65,8 +65,9 @@ func TestForAB(t *testing.T) {
 	b.WindowStart, b.WindowEnd = a.WindowStart.Add(5*time.Minute), a.WindowEnd.Add(5*time.Minute)
 	cols := []report.Column{{Name: "release", Runs: []*report.Report{a}}, {Name: "candidate", Runs: []*report.Report{b}}}
 	nb := ForAB("aoc A/B exp", cols, Options{Experiment: "exp", AppURL: "https://x.datadoghq.com"})
-	// header, profiles, timeline, charts intro, the A/B charts, all metrics, dig deeper
-	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+1+1+1+len(abCharts)+1+1 {
+	// Without findings: header, two embedded profilers, timeline, the two
+	// default charts (CPU, memory), notes.
+	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+2+1+2+1 {
 		t.Fatalf("name=%q cells=%d", nb.Name, len(nb.Cells))
 	}
 	// The window is the later run's, ±60 s.
@@ -75,51 +76,49 @@ func TestForAB(t *testing.T) {
 	}
 	s := string(nb.Body())
 	for _, want := range []string{
-		`"query": "timeshift(sum:aoc.gen.records_per_sec{run:exp-a}, -300)"`, // a shifted onto b
-		`"alias": "release: generated"`,
-		`"query": "sum:aoc.gen.records_per_sec{run:exp-b}"`, // the anchor is not shifted
-		`"alias": "candidate: generated"`,
-		`timeshift(avg:aoc.agent.telemetry.logs_component_utilization.ratio{run:exp-a} by {run,name}, -300)`, // grouped: run joins the group-by
-		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,                                           // the real-time timeline
-		`timeshift(avg:aoc.agent.proc.rss_bytes{run:exp-a} by {run,proc}, -300)`,                             // per-process memory, overlaid
-		"## All metrics",
-		"service%3Adatadog-agent+run%3Aexp-b",
+		`"query": "timeshift(avg:aoc.agent.container.cpu_percent{run:exp-a}, -300)"`, // a shifted onto b
+		`"alias": "release: container (docker stats via intake)"`,
+		`"query": "avg:aoc.agent.container.cpu_percent{run:exp-b}"`, // the anchor is not shifted
+		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,  // the real-time timeline
+		`"type": "iframe"`, "https://x.datadoghq.com/profiling/explorer?query=service%3Adatadog-agent+run%3Aexp-b",
+		"source%3Aaoc+run%3Aexp-b",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("body missing %q", want)
 		}
 	}
-	if strings.Contains(s, "| runs (values are medians)") {
-		t.Error("single-run columns should not print the runs row")
-	}
-	if !strings.Contains(s, "source%3Aaoc+run%3Aexp-b") || !strings.Contains(s, "service%3Adatadog-agent+run%3Aexp-a") {
-		t.Error("dig-deeper links missing")
-	}
-	// The title is the notebook's name; the first cell must not repeat it.
-	if strings.Contains(s, "# aoc A/B exp") {
-		t.Error("first cell repeats the title")
+	for _, unwanted := range []string{"## All metrics", "# aoc A/B exp", "logs_component_utilization"} {
+		if strings.Contains(s, unwanted) {
+			t.Errorf("body should not contain %q", unwanted)
+		}
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(nb.Body(), &parsed); err != nil {
 		t.Fatal(err)
 	}
 
-	// With findings, the regressions get their own cells right after the header.
+	// With findings: tested/differed header, the conclusion, one cell per
+	// regressed topic, profiles+code, the iframes, the timeline, the
+	// topic's charts, notes.
 	b.Resources.ContainerMemMax, a.Resources.ContainerMemMax = 600e6, 200e6
 	b.Resources.ContainerAnonMax, a.Resources.ContainerAnonMax = 580e6, 180e6
-	res := findings.Build(findings.Input{Experiment: "exp", Cols: cols, Threshold: 10})
+	res := findings.Build(findings.Input{Experiment: "exp", Cols: cols, Threshold: 10, Conclusion: "It is the python runner."})
 	nb = ForAB("aoc A/B exp", cols, Options{Experiment: "exp", Findings: res})
-	if len(nb.Cells) != 1+1+1+1+1+len(abCharts)+1+1 {
+	if len(nb.Cells) != 1+1+1+1+2+1+3+1 {
 		t.Fatalf("cells with one regression topic = %d", len(nb.Cells))
 	}
 	s = string(nb.Body())
-	for _, want := range []string{"## Verdict (threshold ±10%)", "## Regression — memory", "Where the memory is", "agent container mem max 200.0 MB → 600.0 MB"} {
+	for _, want := range []string{"## What we tested", "## What differed (threshold ±10%)", "## Conclusion", "It is the python runner.", "## Where", "### Memory", "Where the memory is",
+		"agent container mem max 200.0 MB → 600.0 MB", "## Profiles", `timeshift(avg:aoc.agent.proc.rss_bytes{run:exp-a} by {run,proc}, -300)`, "Agent container memory: anon (processes) vs file cache"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("findings notebook missing %q", want)
 		}
 	}
-	first, _ := json.Marshal(nb.Cells[1])
-	if !strings.Contains(string(first), "## Regression") {
-		t.Error("the regression cell should come right after the header")
+	second, _ := json.Marshal(nb.Cells[1])
+	if !strings.Contains(string(second), "## Conclusion") {
+		t.Error("the conclusion should come right after the header")
+	}
+	if strings.Contains(s, "Latency, written") {
+		t.Error("charts unrelated to the regression should be left out")
 	}
 }

@@ -113,17 +113,20 @@ dig-deeper links. With several `--results`, the comparison table comes first
 and each run's key cells are pinned to that run's window.
 
 `aoc ab` builds an *A/B* notebook instead, in the order an investigation
-reads it: each side's image, digest and version with the verdict; one cell
-per regression topic with its evidence (memory by process and cgroup, the
-profile diffs, telemetry, log); the improvements; the profile diffs and a
-profiler link per run; a real-time timeline of the session
-(`{experiment:<name>} by {variant}`); then the delivery, latency and
-resource charts with all runs overlaid — the cells are pinned to the latest
+reads it: what was tested and what differed (only the rows that moved);
+the conclusion once `aoc conclude` has written one; one cell per topic
+that regressed with its reading and evidence (memory by process and
+cgroup, the profile movers with their source lines, telemetry, log); the
+profiles and the code behind the movers; each side's profiler embedded as
+a same-origin iframe of the flame graph explorer scoped to the run
+(notebooks have no native profiling widget); a real-time timeline of the
+session (`{experiment:<name>} by {variant}`); then only the charts that
+bear on what moved, all runs overlaid — the cells are pinned to the latest
 run's window and each earlier run's queries are wrapped in
 `timeshift(…, -<seconds between the runs>)` so the same second of the
-measured window lines up; grouped queries get `run` added to their group-by
-so the legend still tells the sides apart. The full metric table and the
-per-run links close it.
+measured window lines up; grouped queries get `run` added to their
+group-by so the legend still tells the sides apart. Every metric stays in
+`compare.md`.
 
 Creating the notebook needs `DD_APP_KEY`; `notebook.json` is always written
 and can be fed to the Datadog MCP's `create_datadog_notebook`.

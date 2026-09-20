@@ -232,3 +232,50 @@ func (c *Client) CreateNotebook(ctx context.Context, body []byte) (int64, string
 	}
 	return resp.Data.ID, fmt.Sprintf("%s/notebook/%d", AppURLFor(c.Site, os.Getenv("DD_SUBDOMAIN"), os.Getenv("DD_APP_URL")), resp.Data.ID), nil
 }
+
+// NotebookID extracts the numeric id from a notebook URL or id string.
+func NotebookID(urlOrID string) string {
+	u := strings.TrimRight(urlOrID, "/")
+	if i := strings.LastIndex(u, "/"); i >= 0 {
+		u = u[i+1:]
+	}
+	return u
+}
+
+// PrependNotebookCell adds a markdown cell at the top of an existing
+// notebook (GET, then PUT with the existing cells referenced by id).
+func (c *Client) PrependNotebookCell(ctx context.Context, id string, text string) error {
+	out, err := c.do(ctx, "GET", "/api/v1/notebooks/"+id, nil, false, true)
+	if err != nil {
+		return err
+	}
+	var nb struct {
+		Data struct {
+			Attributes map[string]json.RawMessage `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &nb); err != nil {
+		return fmt.Errorf("decode notebook: %w", err)
+	}
+	var cells []json.RawMessage
+	if raw, ok := nb.Data.Attributes["cells"]; ok {
+		if err := json.Unmarshal(raw, &cells); err != nil {
+			return fmt.Errorf("decode cells: %w", err)
+		}
+	}
+	first, _ := json.Marshal(map[string]any{"type": "notebook_cells", "attributes": map[string]any{
+		"definition": map[string]any{"type": "markdown", "text": text},
+	}})
+	attrs := map[string]any{"cells": append([]json.RawMessage{first}, cells...)}
+	for _, k := range []string{"name", "time", "status", "metadata"} {
+		if v, ok := nb.Data.Attributes[k]; ok {
+			attrs[k] = v
+		}
+	}
+	body, err := json.Marshal(map[string]any{"data": map[string]any{"type": "notebooks", "attributes": attrs}})
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, "PUT", "/api/v1/notebooks/"+id, body, false, true)
+	return err
+}

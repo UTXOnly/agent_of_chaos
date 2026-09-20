@@ -15,14 +15,20 @@ the working copy. Read this file, then the skill for the task at hand.
    is the default; the run takes ~2 × (warmup + duration + drain + 2 min).
    Run it in the background with output to a file and wait — do not poll.
 3. **Read** `results/<name>/findings.md` (skill: `investigate`). It is the
-   whole brief: verdict, regressions with evidence, improvements, profile
-   diffs, headline. It is written to be read in one go (~5–15 KB).
-4. **Dig** only where the brief's "Next" lines say so, with the Datadog MCP
-   and the exact filters they give. Two or three calls per regression is
-   the budget; the local evidence usually already names the cause.
-5. **Conclude** with `./bin/aoc conclude --results results/<name> "…"` —
-   the verdict becomes an event next to the test's data (and, if asked, a
-   notebook cell via the MCP).
+   whole brief: what we tested, what differed (only rows that moved),
+   where (per regressed topic: a one-sentence reading, the tables that
+   name the cause, the profile movers with their source lines), the
+   profiles, and the code — each mover located in the agent's source with
+   whether its file changed between the two builds. ~5–10 KB.
+4. **Dig** only where the brief points: the function at `file:line` in the
+   agent checkout (`source:` in aoc.yaml; `../datadog-agent` is found on
+   its own) for a CPU/memory mover that is new or changed, and the Datadog
+   MCP with the exact filters the brief gives. Two or three calls per
+   regression is the budget.
+5. **Conclude** with `./bin/aoc conclude --results results/<name> "…"`:
+   what the difference is, where in the code, and what to change. It
+   becomes an event next to the test's data and the first cell of the
+   notebook.
 
 ## What to read, and what not to
 
@@ -62,7 +68,9 @@ created with the MCP's `create_datadog_notebook`.
   the agent's own metrics and profiles (`service:datadog-agent`).
 - Profiles: the agent's continuous-profiler uploads are tee'd by the intake
   — kept under `<side>/profiles/` for the local diff and forwarded to
-  Datadog unchanged. Only the core agent is profiled by default.
+  Datadog unchanged. Only the core agent is profiled by default. The
+  profiler's tags carry each build's commit; the brief uses them for the
+  code section and the agent checkout.
 - `threshold` (aoc.yaml, default 10 %) decides what is a finding. Lost,
   duplicated or reordered records always are.
 - Keep experiments small (laptop or a t4g instance); the workload is the

@@ -115,15 +115,22 @@ line limit, so counts are a lower bound.
 
 ## Findings (`aoc ab`)
 
-`findings.md` classifies every headline row of the comparison: a change of
-at least `threshold` percent (aoc.yaml, default 10) in the worse direction
-is a *regression*, in the better direction an *improvement*; lost,
-duplicated, reordered and orphaned records are always findings (both sides
-non-zero and similar → *present on both sides*). Each regression topic
-(memory, cpu, latency, delivery, stability, bytes, tags) gets the tables
-that explain it, and "Next" lines with the exact Datadog MCP calls (filters,
-windows) for the level below. The threshold is not a statistical test: a
-single run on a laptop moves resource numbers by a few percent on its own;
+`findings.md` is built in the order an investigation reads it: **what we
+tested** (images, versions, digests, commits, what only one side had, the
+workload, delivery), **what differed** (a change of at least `threshold`
+percent — aoc.yaml, default 10 — in the worse direction is a *regression*,
+in the better direction an *improvement*; lost, duplicated, reordered and
+orphaned records are always findings; the table lists only rows that moved
+by 5 % or more), **where** (one section per regressed topic — memory, cpu,
+latency, delivery, stability, bytes/tags — with a one-sentence *reading*
+derived from the numbers, the tables that explain it, and the profile
+movers with the source line of each), **profiles** (totals and the movers
+of the views not already shown), and **code** (every mover inside the
+agent's module located at `file:line`, linked at the tested commit, and —
+with a checkout that has both commits — whether the file is new, changed
+or unchanged between the builds). Once written, the **conclusion** goes
+under "what we tested". The threshold is not a statistical test: a single
+run on a laptop moves resource numbers by a few percent on its own;
 `runs: 2` or more takes medians.
 
 ## Agent telemetry

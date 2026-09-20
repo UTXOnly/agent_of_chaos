@@ -486,6 +486,9 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		logf("profiles: none uploaded (DD_INTERNAL_PROFILING_ENABLED and DD_APM_ENABLED must be true, and apm_config.profiling_dd_url must point at the intake)")
 	default:
 		r.Profiles = prof.Summaries(caps, 40)
+		// The profiler tags the build it runs in: the exact commit behind
+		// each side, for the code section of the brief.
+		r.Agent.Commit, r.Agent.Repo = profileTag(caps, "git.commit.sha"), profileTag(caps, "git.repository_url")
 		note := ""
 		if pst.ForwardErrors > 0 {
 			note = fmt.Sprintf("; %d forward error(s), last: %s", pst.ForwardErrors, pst.LastError)

@@ -7,8 +7,8 @@ paths:
 
 A results directory is large; the brief is small. Order of preference:
 
-1. `results/<name>/findings.md` — the whole story (verdict, evidence,
-   profile diffs, headline). Read it fully, once.
+1. `results/<name>/findings.md` — the whole story (what was tested, what
+   differed, where, profiles, code, conclusion). Read it fully, once.
 2. `results/<name>/compare.md` — every metric, the per-process table, the
    telemetry counters.
 3. `results/<name>/ab.json` — identities, windows, notebook URL, file paths.

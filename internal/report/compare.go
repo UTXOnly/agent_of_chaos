@@ -497,6 +497,9 @@ func colNames(cols []Column) []string {
 	return out
 }
 
+// DeltaLower renders b against a for a metric where lower is better.
+func DeltaLower(a, b float64) string { return delta(a, b, lower) }
+
 func delta(a, b float64, s sense) string {
 	if a == 0 && b == 0 {
 		return "="
