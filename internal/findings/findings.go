@@ -273,7 +273,8 @@ func tested(in Input) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s · %s.", side(a), side(b))
 	if len(in.ConfigDiff) > 0 {
-		fmt.Fprintf(&sb, " %s.", strings.Join(in.ConfigDiff, "; "))
+		d := strings.Join(in.ConfigDiff, "; ")
+		fmt.Fprintf(&sb, " %s%s.", strings.ToUpper(d[:1]), d[1:])
 	}
 	r := a.Runs[0]
 	work := in.Workload
@@ -368,7 +369,7 @@ func evidenceFor(topic, kind string, in Input, res *Result) (string, []Evidence)
 			ev = append(ev, Evidence{Title: title, Markdown: md})
 		}
 	}
-	rows := report.Rows(in.Cols, []string{"agent container mem max", "agent container anon mem max", "agent container file cache max", "core agent RSS max", "core agent Go heap in use"})
+	rows := report.Rows(in.Cols, []string{"agent container mem max", "agent container anon mem max", "agent container anon mem avg", "agent container file cache max", "core agent RSS max", "core agent Go heap in use"})
 	reading := ""
 	switch topic {
 	case "memory":
@@ -400,10 +401,37 @@ func evidenceFor(topic, kind string, in Input, res *Result) (string, []Evidence)
 		add("Payload geometry", rowsTable(in.Cols, []string{"received wire B/s", "compression ratio", "logs per payload p50", "payload wire p50", "tags per log", "tag bytes per log"}, false))
 		add("Tag keys that changed (share of logs carrying each key)", tagKeysTable(in.Cols))
 	case "stability":
-		add("Agent log: most repeated warnings and errors", logTable(in.Cols))
+		reading = stabilityReading(in.Cols)
 		add("Runtime", rowsTable(in.Cols, []string{"core agent goroutines", "core agent Go heap in use", "core agent RSS max"}, false))
+		add("Agent log: most repeated warnings and errors", logTable(in.Cols))
 	}
 	return reading, ev
+}
+
+// stabilityReading tells a bigger goroutine baseline from a leak: the
+// count at the start of the window against the end, on the candidate.
+func stabilityReading(cols []report.Column) string {
+	b := cols[1]
+	first := b.Value(func(r *report.Report) float64 { return report.TeleFirst(r, "go_goroutines", "") })
+	last := b.Value(func(r *report.Report) float64 { return report.Tele(r, "go_goroutines", "") })
+	aLast := cols[0].Value(func(r *report.Report) float64 { return report.Tele(r, "go_goroutines", "") })
+	if first <= 0 || last <= 0 {
+		return ""
+	}
+	aFirst := cols[0].Value(func(r *report.Report) float64 { return report.TeleFirst(r, "go_goroutines", "") })
+	growth := (last - first) / first * 100
+	aGrowth := 0.0
+	if aFirst > 0 {
+		aGrowth = (aLast - aFirst) / aFirst * 100
+	}
+	switch {
+	case math.Abs(growth) < 5:
+		return fmt.Sprintf("The goroutine count is higher in %s (%.0f vs %.0f) but flat over the window (%.0f at the start, %.0f at the end): a bigger baseline — more components started in this build — not a leak.", b.Name, last, aLast, first, last)
+	case aFirst > 0 && math.Abs(growth-aGrowth) < 10:
+		return fmt.Sprintf("Goroutines grow over the window on both sides (%s %.0f → %.0f, %s %.0f → %.0f): the workload — tailers for rotated files, senders — not the change; %s ends %.0f%% higher.", cols[0].Name, aFirst, aLast, b.Name, first, last, b.Name, (last-aLast)/aLast*100)
+	default:
+		return fmt.Sprintf("Goroutines in %s grew from %.0f to %.0f over the window (%+.0f%%) against %+.0f%% in %s: leak-like. The goroutine profile is not uploaded by default (DD_INTERNAL_PROFILING_ENABLE_GOROUTINE_STACKTRACES=true adds it).", b.Name, first, last, growth, aGrowth, cols[0].Name)
+	}
 }
 
 // rowsTable is a slice of the comparison table; onlyChanged drops rows
@@ -436,6 +464,8 @@ func memoryTable(cols []report.Column, rows []report.HeadlineRow) string {
 			label = "container memory max (usage − inactive file cache)"
 		case "agent container anon mem max":
 			label = "├ anon: the processes' own memory (max)"
+		case "agent container anon mem avg":
+			label = "├ anon (average over the window)"
 		case "agent container file cache max":
 			label = "├ file: page cache charged to the container (max)"
 		case "core agent RSS max":
@@ -468,15 +498,22 @@ func coreMemoryRose(rows []report.HeadlineRow) bool {
 func memoryReading(rows []report.HeadlineRow) string {
 	cont, _ := pctOf(rows, "agent container mem max")
 	anon, av := pctOf(rows, "agent container anon mem max")
+	anonAvg, aav := pctOf(rows, "agent container anon mem avg")
 	file, fv := pctOf(rows, "agent container file cache max")
 	rss, rv := pctOf(rows, "core agent RSS max")
 	heap, hv := pctOf(rows, "core agent Go heap in use")
 	up := func(p float64) bool { return !math.IsNaN(p) && p >= 5 }
 	flat := func(p float64) bool { return math.IsNaN(p) || math.Abs(p) < 5 }
 	f := func(v [2]float64) string { return fmtutil.BytesF(v[0]) + " → " + fmtutil.BytesF(v[1]) }
+	cache := ""
+	if up(file) {
+		cache = fmt.Sprintf(" The rest of the container's growth is page cache (file %s): files read, reclaimable, not a leak.", f(fv))
+	}
 	switch {
 	case up(cont) && !up(anon) && up(file):
 		return fmt.Sprintf("The container grew through page cache (file %s), not process memory (anon %s): files read, not a leak; the kernel reclaims it under pressure. Not a regression.", f(fv), f(av))
+	case up(anon) && flat(anonAvg) && flat(rss):
+		return fmt.Sprintf("Process memory peaked higher (anon max %s) but averaged the same over the window (%s), with the core agent's RSS flat (%s): a transient spike between samples, not a steady increase.%s", f(av), f(aav), f(rv), cache)
 	case up(anon) && flat(rss):
 		return fmt.Sprintf("Process memory grew (anon %s) while the core agent's RSS did not (%s): the memory is in another process — see the process table.", f(av), f(rv))
 	case up(anon) && up(rss) && flat(heap):
@@ -949,7 +986,7 @@ func codeRows(in Input, res *Result) ([]CodeRow, string) {
 			if canDiff && where == "repo" {
 				row.Change = fileChange(src, a.Agent.Commit, b.Agent.Commit, path)
 			}
-			if math.Abs(r.Delta) < floor && row.Change != "new in b" {
+			if math.Abs(r.Delta) < floor && !(row.Change == "new in b" && math.Abs(r.Delta) >= floor/2) {
 				continue
 			}
 			seen[r.Function] = true
@@ -1058,8 +1095,13 @@ func nextFor(topic string, in Input, res *Result) []string {
 	scope := func(r *report.Report) string { return "service:datadog-agent run:" + r.Name }
 	topFn := func(label string) string {
 		for _, d := range res.Profiles {
-			if d.Label == label && len(d.Rows) > 0 {
-				return regexpSafe(prof.ShortFunc(d.Rows[0].Function))
+			if d.Label != label {
+				continue
+			}
+			for _, r := range d.Rows { // largest |Δ| first; the first increase
+				if r.Delta > 0 {
+					return regexpSafe(prof.ShortFunc(r.Function))
+				}
 			}
 		}
 		return ""
@@ -1258,20 +1300,23 @@ func EventText(res *Result, in Input, nbURL string) string {
 	return s
 }
 
-// ProfileLinks renders the Datadog profiler link for every run: the
-// explorer scoped to the run's tag and window.
+// ProfileLinks renders, for every run, the profiler's flame graph for CPU,
+// live heap and allocations, scoped to the run's tag and window.
 func ProfileLinks(cols []report.Column, appURL string, margin time.Duration) string {
 	var b strings.Builder
 	for _, c := range cols {
 		for _, r := range c.Runs {
-			fmt.Fprintf(&b, "- **%s** `run:%s`: [profiles](%s)\n", c.Name, r.Name, ProfileURL(r, appURL, margin))
+			fmt.Fprintf(&b, "- **%s** `run:%s`: [CPU](%s) · [heap live size](%s) · [allocations](%s)\n", c.Name, r.Name,
+				ProfileURL(r, appURL, margin, "cpu-time"), ProfileURL(r, appURL, margin, "heap-live-size"), ProfileURL(r, appURL, margin, "alloc-size"))
 		}
 	}
 	return b.String()
 }
 
-// ProfileURL is the profiling explorer scoped to one run.
-func ProfileURL(r *report.Report, appURL string, margin time.Duration) string {
+// ProfileURL is the profiling explorer's flame graph of one profile type
+// (cpu-time, heap-live-size, alloc-size, …) scoped to one run, in the form
+// the profiler's own links use.
+func ProfileURL(r *report.Report, appURL string, margin time.Duration, profileType string) string {
 	from, to := r.WindowStart.Add(-margin).UnixMilli(), r.WindowEnd.Add(margin).UnixMilli()
-	return fmt.Sprintf("%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true", appURL, url.QueryEscape("service:datadog-agent run:"+r.Name), from, to)
+	return fmt.Sprintf("%s/profiling/explorer?query=%s&profile_type=%s&start=%d&end=%d&viz=flame_graph&paused=true", appURL, url.QueryEscape("service:datadog-agent run:"+r.Name), profileType, from, to)
 }

@@ -48,6 +48,7 @@ var compareMetrics = []metric{
 	{"agent container mem avg", func(r *Report) float64 { return float64(r.Resources.ContainerMemAvg) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
 	{"agent container mem max", func(r *Report) float64 { return float64(r.Resources.ContainerMemMax) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
 	{"agent container anon mem max", func(r *Report) float64 { return float64(r.Resources.ContainerAnonMax) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
+	{"agent container anon mem avg", func(r *Report) float64 { return float64(r.Resources.ContainerAnonAvg) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
 	{"agent container file cache max", func(r *Report) float64 { return float64(r.Resources.ContainerFileMax) }, func(v float64) string { return fmtutil.BytesF(v) }, neutral},
 	{"core agent process CPU avg", func(r *Report) float64 { return r.Resources.ProcessCPUAvg }, func(v float64) string { return fmt.Sprintf("%.1f%%", v) }, lower},
 	{"core agent RSS max", func(r *Report) float64 { return float64(r.Resources.ProcessRSSMax) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
@@ -81,6 +82,16 @@ func Tele(r *Report, name, labels string) float64 {
 	for _, t := range r.Telemetry {
 		if t.Name == name && (labels == "" && t.Labels == "" || labels != "" && strings.Contains(t.Labels, labels)) {
 			return t.Last
+		}
+	}
+	return 0
+}
+
+// TeleFirst is a series' value when the window opened.
+func TeleFirst(r *Report, name, labels string) float64 {
+	for _, t := range r.Telemetry {
+		if t.Name == name && (labels == "" && t.Labels == "" || labels != "" && strings.Contains(t.Labels, labels)) {
+			return t.First
 		}
 	}
 	return 0

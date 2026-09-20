@@ -23,7 +23,7 @@ func sample(name string, memMax, anonMax int64, cpu float64) *report.Report {
 	r.Delivery = report.Delivery{GeneratedRecords: 1000, ReceivedLogs: 1000, Unique: 1000, Ratio: 1, AllFinal: true}
 	r.Throughput = report.Throughput{GenRecordsPerSec: 9900, RecvLogsPerSec: 1000, RecvWireBytesPerSec: 200e3, CompressionRatio: 20}
 	r.Latency.EndToEnd = report.Quantiles{Count: 10, P50: 0.7, P99: 1.9, Max: 2}
-	r.Resources = report.Resources{ContainerMemMax: memMax, ContainerMemAvg: memMax - 10e6, ContainerAnonMax: anonMax, ContainerFileMax: memMax - anonMax, ContainerCPUAvg: cpu, ProcessCPUAvg: cpu - 2, ProcessRSSMax: 220e6, CPUSecondsPerMLogs: 16,
+	r.Resources = report.Resources{ContainerMemMax: memMax, ContainerMemAvg: memMax - 10e6, ContainerAnonMax: anonMax, ContainerAnonAvg: anonMax - 5e6, ContainerFileMax: memMax - anonMax, ContainerCPUAvg: cpu, ProcessCPUAvg: cpu - 2, ProcessRSSMax: 220e6, CPUSecondsPerMLogs: 16,
 		Processes: []report.ProcessStat{{Name: "agent", RSSMax: 220e6, CPUAvg: cpu - 2, Samples: 10}, {Name: "trace-agent", RSSMax: 40e6, CPUAvg: 1, Samples: 10}}}
 	r.Tags = report.Tags{AvgTagsPerLog: 4, AvgTagBytesPerLog: 120, Keys: []report.NameCount{{Name: "env", Count: 1000}, {Name: "service", Count: 1000}}}
 	r.Telemetry = []report.Telemetry{{Name: "go_goroutines", Type: "gauge", Last: 300}, {Name: "go_memstats_heap_inuse_bytes", Type: "gauge", Last: 150e6}, {Name: "logs_component_utilization__ratio", Labels: `{name="sender"}`, Type: "gauge", Last: 0.4}}
@@ -101,7 +101,7 @@ func TestBuildAndMarkdown(t *testing.T) {
 	if contains(changed, "delivery ratio") || contains(changed, "e2e latency p50") {
 		t.Errorf("unchanged rows should not be listed: %v", changed)
 	}
-	if !strings.Contains(res.Tested, "**release** = 7.83.2 (datadog/agent:7)") || !strings.Contains(res.Tested, "only `dev` has DD_X=1") || !strings.Contains(res.Tested, "Workload baseline — steady mix — 16 streams at 9,900/s, 10m00s window, 1 round(s) per side") {
+	if !strings.Contains(res.Tested, "**release** = 7.83.2 (datadog/agent:7)") || !strings.Contains(res.Tested, "Only `dev` has DD_X=1") || !strings.Contains(res.Tested, "Workload baseline — steady mix — 16 streams at 9,900/s, 10m00s window, 1 round(s) per side") {
 		t.Errorf("tested: %s", res.Tested)
 	}
 

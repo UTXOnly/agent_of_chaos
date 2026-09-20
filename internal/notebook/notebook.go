@@ -379,7 +379,7 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	}
 	for _, c := range cols {
 		if len(c.Runs) > 0 {
-			nb.Cells = append(nb.Cells, iframe(findings.ProfileURL(c.Runs[0], o.AppURL, o.Margin)))
+			nb.Cells = append(nb.Cells, iframe(findings.ProfileURL(c.Runs[0], o.AppURL, o.Margin, "cpu-time")))
 		}
 	}
 

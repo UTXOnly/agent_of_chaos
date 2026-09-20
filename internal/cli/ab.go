@@ -584,11 +584,13 @@ func abColumns(cfg *ABConfig, all []abRun) ([]report.Column, error) {
 			return nil, err
 		}
 		rep.Name = r.name
-		if len(rep.Profiles) == 0 {
-			// Reports written before the profiles were analysed (or by an
-			// older aoc) still have the pprof files next to them.
-			if caps, err := prof.LoadDir(r.dir); err == nil {
-				rep.Profiles = prof.Summaries(prof.Overlapping(caps, rep.WindowStart, rep.WindowEnd), 40)
+		if len(rep.Profiles) == 0 || rep.Agent.Commit == "" {
+			// Reports written by an older aoc still have the pprof files
+			// next to them: analyse them and read the build's commit.
+			if caps, err := prof.LoadDir(r.dir); err == nil && len(caps) > 0 {
+				if len(rep.Profiles) == 0 {
+					rep.Profiles = prof.Summaries(prof.Overlapping(caps, rep.WindowStart, rep.WindowEnd), 40)
+				}
 				if rep.Agent.Commit == "" {
 					rep.Agent.Commit, rep.Agent.Repo = profileTag(caps, "git.commit.sha"), profileTag(caps, "git.repository_url")
 				}

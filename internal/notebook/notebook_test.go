@@ -80,7 +80,7 @@ func TestForAB(t *testing.T) {
 		`"alias": "release: container (docker stats via intake)"`,
 		`"query": "avg:aoc.agent.container.cpu_percent{run:exp-b}"`, // the anchor is not shifted
 		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,  // the real-time timeline
-		`"type": "iframe"`, "https://x.datadoghq.com/profiling/explorer?query=service%3Adatadog-agent+run%3Aexp-b",
+		`"type": "iframe"`, "run%3Aexp-b\\u0026profile_type=cpu-time\\u0026start=", // json escapes & in the body
 		"source%3Aaoc+run%3Aexp-b",
 	} {
 		if !strings.Contains(s, want) {
