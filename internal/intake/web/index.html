@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent of chaos · logs harness</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">⚡</span>
+    <div>
+      <div class="title">agent of chaos <span class="muted">· logs harness</span></div>
+      <div class="sub" id="run-line">connecting…</div>
+    </div>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="actions">
+    <label class="select"><span>window</span>
+      <select id="window">
+        <option value="120">2 min</option>
+        <option value="600" selected>10 min</option>
+        <option value="3600">1 hour</option>
+        <option value="0">all</option>
+      </select>
+    </label>
+    <button id="pause" class="btn" title="stop polling">pause</button>
+    <a class="btn" href="/harness/report" target="_blank" title="full JSON report (aoc report renders Markdown)">report.json</a>
+    <button id="reset" class="btn danger" title="zero every counter and start a new measurement window">reset window</button>
+  </div>
+</header>
+
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="charts">
+    <div class="chart" data-chart="throughput"><div class="chart-head"><h3>Throughput</h3><div class="legend"></div></div><canvas></canvas><div class="tip"></div></div>
+    <div class="chart" data-chart="latency"><div class="chart-head"><h3>Latency, written → intake</h3><div class="legend"></div></div><canvas></canvas><div class="tip"></div></div>
+    <div class="chart" data-chart="bytes"><div class="chart-head"><h3>Bytes received</h3><div class="legend"></div></div><canvas></canvas><div class="tip"></div></div>
+    <div class="chart" data-chart="cpu"><div class="chart-head"><h3>Agent CPU</h3><div class="legend"></div></div><canvas></canvas><div class="tip"></div></div>
+    <div class="chart" data-chart="mem"><div class="chart-head"><h3>Agent memory</h3><div class="legend"></div></div><canvas></canvas><div class="tip"></div></div>
+    <div class="chart" data-chart="http"><div class="chart-head"><h3>HTTP responses</h3><div class="legend"></div></div><canvas></canvas><div class="tip"></div></div>
+  </section>
+
+  <section class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h3>Delivery ledger</h3><span class="muted" id="ledger-note"></span></div>
+      <div class="kv" id="ledger"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Faults</h3><span class="muted" id="faults-state"></span></div>
+      <form id="faults" class="faults" autocomplete="off">
+        <div class="presets">
+          <button type="button" data-preset='{"error_rate":0.5,"error_status":503}'>503 ×50%</button>
+          <button type="button" data-preset='{"error_rate":0.2,"error_status":429}'>429 ×20%</button>
+          <button type="button" data-preset='{"error_rate":0.05,"error_status":400}'>400 ×5%</button>
+          <button type="button" data-preset='{"latency_ms":500,"jitter_ms":300}'>slow +500ms</button>
+          <button type="button" data-preset='{"drop_rate":0.1}'>drop 10%</button>
+          <button type="button" data-preset='{"outage":true}'>outage</button>
+          <button type="button" data-preset='{"read_bps":200000}'>200 kB/s uplink</button>
+        </div>
+        <div class="fields">
+          <label>latency ms <input name="latency_ms" type="number" min="0" step="10"></label>
+          <label>jitter ms <input name="jitter_ms" type="number" min="0" step="10"></label>
+          <label>error rate % <input name="error_rate" type="number" min="0" max="100" step="1"></label>
+          <label>error status <input name="error_status" type="number" min="400" max="599" placeholder="500"></label>
+          <label>drop rate % <input name="drop_rate" type="number" min="0" max="100" step="1"></label>
+          <label>read B/s <input name="read_bps" type="number" min="0" step="1000"></label>
+          <label class="check"><input name="outage" type="checkbox"> outage (drop all)</label>
+          <label class="wide">note <input name="note" type="text" placeholder="what are you simulating?"></label>
+        </div>
+        <div class="row">
+          <button type="submit" class="btn primary">apply</button>
+          <button type="button" id="faults-clear" class="btn">clear</button>
+          <span class="muted small">429/5xx → the agent retries · other 4xx → the agent drops the batch · drop = no response at all</span>
+        </div>
+      </form>
+      <div class="events" id="fault-events"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Streams</h3><input id="stream-filter" class="filter" placeholder="filter gen/stream…"><span class="muted" id="streams-note"></span></div>
+    <div class="table-wrap"><table id="streams"><thead><tr>
+      <th>gen</th><th>stream</th><th class="num">generated</th><th class="num">received</th><th class="num">unique</th><th class="num">missing</th><th class="num">dups</th><th class="num">out of order</th><th class="num">multiline</th><th class="num">bytes</th><th>last seen</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h3>Generators</h3></div>
+      <div class="table-wrap"><table id="gens"><thead><tr><th>name</th><th>mode</th><th>phase</th><th class="num">streams</th><th class="num">target</th><th class="num">rate</th><th class="num">records</th><th class="num">rotations</th><th class="num">cpu</th><th>seen</th></tr></thead><tbody></tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>HTTP</h3></div>
+      <div class="kv" id="http"></div>
+    </div>
+  </section>
+
+  <section class="grid3">
+    <div class="panel"><div class="panel-head"><h3>Tags</h3><span class="muted" id="tags-note"></span></div><div class="table-wrap"><table id="tags"><thead><tr><th>key</th><th class="num">on logs</th><th class="num">share</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="panel"><div class="panel-head"><h3>Services</h3></div><div class="table-wrap"><table id="services"><thead><tr><th>service</th><th class="num">logs</th><th class="num">bytes</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="panel"><div class="panel-head"><h3>Sources · hosts · status</h3></div><div class="table-wrap"><table id="sources"><thead><tr><th>value</th><th class="num">logs</th></tr></thead><tbody></tbody></table></div></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Agent telemetry</h3><input id="telemetry-filter" class="filter" placeholder="filter metric…" value="logs"><span class="muted" id="telemetry-note"></span></div>
+    <div class="table-wrap"><table id="telemetry"><thead><tr><th>metric</th><th>labels</th><th>type</th><th class="num">value</th><th class="num">Δ window</th><th class="num">rate /s</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Samples</h3><span class="muted">one log per received payload, newest first</span></div>
+    <div id="samples" class="samples"></div>
+  </section>
+</main>
+<footer class="muted small">agent_of_chaos · <span id="version"></span> · poll every 1s · <a href="/metrics">/metrics</a> · <a href="/harness/stats">/harness/stats</a> · <a href="/harness/timeseries?format=csv">timeseries.csv</a></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

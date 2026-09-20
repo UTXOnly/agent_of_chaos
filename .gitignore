@@ -1,16 +1,14 @@
-# Runtime logs
+# Runtime output
 logs/*
 !logs/.gitkeep
-bytecheck_run/
+results/
 *.log
 *.log.*
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
+# Build
+bin/
+dist/
+/aoc
 
 # Local secrets / compose overrides
 .env

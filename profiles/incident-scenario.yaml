@@ -1,0 +1,8 @@
+name: incident-scenario
+description: The built-in "incident" scenario compressed 10× — normal ops, a sudden 14-stream spike with heavy stack traces and bursts, then a slow recovery. Shows how the pipeline absorbs a step change.
+duration: 5m
+warmup: 15s
+drain: 60s
+generators:
+  gen-plain: { mode: scenario, scenario: incident, scenario-speed: 10 }
+  gen-json:  { enabled: false }

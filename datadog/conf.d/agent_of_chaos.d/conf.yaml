@@ -1,29 +1,26 @@
-# File-tail config for the tag-filter fleet (docker-compose.tag-filter.yml).
-# Both entries add filename:/dirname: tags, which DD_LOGS_CONFIG_TAG_FILTERS strips.
+# File-tailing config for the aoc harness (docker-compose.yml) and the
+# tag-filter fleet (docker-compose.tag-filter.yml). Generators write to
+# /var/log/agent-of-chaos/<generator>/<stream>.log (plain) and
+# <stream>.json.log (JSON). Rotated files (*.log.1 …) are not tailed.
 logs:
-  # plain-NN containers run with AOCH_BENCHMARK_PLAIN_ONLY=true, so only *.log exists,
-  # but exclude *.json.log anyway so the two halves of the fleet never overlap.
   - type: file
-    path: /var/log/agent-of-chaos/plain-*/*.log
+    path: /var/log/agent-of-chaos/*/*.log
     exclude_paths:
-      - /var/log/agent-of-chaos/plain-*/*.json.log
+      - /var/log/agent-of-chaos/*/*.json.log
     service: aoc-plain
     source: agent-of-chaos
     tags:
       - log_format:plain
       - project:agent-of-chaos
-      - version:fleet-1
     log_processing_rules:
       - type: multi_line
-        name: plain_timestamp_start
+        name: timestamp_start
         pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
 
-  # json-NN containers write both files; only tail the JSON one.
   - type: file
-    path: /var/log/agent-of-chaos/json-*/*.json.log
+    path: /var/log/agent-of-chaos/*/*.json.log
     service: aoc-json
     source: agent-of-chaos-json
     tags:
       - log_format:json
       - project:agent-of-chaos
-      - version:fleet-1

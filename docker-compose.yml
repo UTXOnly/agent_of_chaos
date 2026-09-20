@@ -1,17 +1,160 @@
+# agent_of_chaos harness: fake Datadog logs intake + the Agent under test +
+# log generators, fully offline by default (no real API key needed).
+#
+#   docker compose up -d --build            # intake + agent + gen-plain + gen-json
+#   open http://localhost:8282              # live dashboard
+#   aoc report --intake http://localhost:8282 --out results/my-run
+#   docker compose down -v                  # -v: also drop the log volume for a clean next run
+#
+# Tunables (put them in .env or on the command line):
+#   DD_AGENT_IMAGE=datadog/agent-dev:my-build   agent image under test
+#   AOC_RATE=20000 AOC_STREAMS=16               per-generator workload
+#   DD_DD_URL=https://app.datadoghq.com          ship metrics to real Datadog (needs a real DD_API_KEY)
+#   docker compose --profile stdout up -d        add a generator that logs to stdout (docker log driver path)
+#   docker compose up -d --scale gen-plain=4     more generator containers
+#
+# `aoc run --profile profiles/<name>.yaml` drives all of this for you.
+
+name: aoc
+
+x-gen: &gen
+  image: agent-of-chaos:latest
+  restart: unless-stopped
+  stop_grace_period: 20s
+  volumes:
+    - aoc-logs:/var/log/agent-of-chaos
+  depends_on:
+    intake:
+      condition: service_healthy
+
+x-gen-env: &gen-env
+  AOC_INTAKE: http://intake:8282
+  AOC_MODE: ${AOC_MODE:-steady}
+  AOC_STREAMS: ${AOC_STREAMS:-8}
+  AOC_RATE: ${AOC_RATE:-2000}
+  AOC_DURATION: ${AOC_DURATION:-0}
+  AOC_ROTATE_BYTES: ${AOC_ROTATE_BYTES:-2MiB}
+  AOC_ROTATE_KEEP: ${AOC_ROTATE_KEEP:-3}
+  AOC_ROTATE_MODE: ${AOC_ROTATE_MODE:-rename}
+  AOC_MULTILINE_RATE: ${AOC_MULTILINE_RATE:-0.05}
+  AOC_WIDE_LINE_RATE: ${AOC_WIDE_LINE_RATE:-0}
+  AOC_WIDE_LINE_BYTES: ${AOC_WIDE_LINE_BYTES:-4096}
+  AOC_PAD_TO: ${AOC_PAD_TO:-0}
+  AOC_BURST_SIZE: ${AOC_BURST_SIZE:-0}
+  AOC_BURST_INTERVAL: ${AOC_BURST_INTERVAL:-5s}
+  AOC_SCENARIO: ${AOC_SCENARIO:-}
+  AOC_SCENARIO_SPEED: ${AOC_SCENARIO_SPEED:-1}
+  AOC_DETERMINISTIC: ${AOC_DETERMINISTIC:-false}
+  AOC_SEED: ${AOC_SEED:-0}
+  AOC_CHAOS_CRASH_RATE: ${AOC_CHAOS_CRASH_RATE:-2}
+
 services:
-  agent-of-chaos:
-    build: .
+  intake:
     image: agent-of-chaos:latest
-    container_name: agent-of-chaos
-    restart: unless-stopped
-    environment:
-      AOCH_MODE: ${AOCH_MODE:-steady}
-      AOCH_SERVICES: ${AOCH_SERVICES:-10}
-      AOCH_LINES_PER_CYCLE: ${AOCH_LINES_PER_CYCLE:-20}
-      AOCH_LOG_DIR: /var/log/agent-of-chaos
-      AOCH_BENCHMARK_CONFIG: ${AOCH_BENCHMARK_CONFIG:-}
-      AOCH_BENCHMARK: ${AOCH_BENCHMARK:-}
+    build:
+      context: .
+      args:
+        VERSION: ${AOC_VERSION:-dev}
+    container_name: aoc-intake
+    # Root only so it can read docker.sock for the agent's container CPU/memory.
+    user: "0:0"
+    command:
+      - intake
+      - --name=${AOC_RUN_NAME:-local}
+      - --agent-telemetry=http://localhost:5000/telemetry
+      - --docker-container=aoc-agent
+      - --agent-image=${DD_AGENT_IMAGE:-datadog/agent:7}
+    ports:
+      - "${AOC_INTAKE_PORT:-8282}:8282"
+      - "${AOC_TCP_PORT:-10516}:10516"
     volumes:
-      - ./logs:/var/log/agent-of-chaos
-    # CLI flags still work and override env defaults when passed:
-    # command: ["--mode", "chaos", "--services", "8"]
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8282/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  datadog-agent:
+    image: ${DD_AGENT_IMAGE:-datadog/agent:7}
+    container_name: aoc-agent
+    # Share the intake's network namespace: the agent reaches the intake at
+    # localhost:8282 and the intake scrapes the agent's localhost-only
+    # telemetry endpoint (:5000). Restarting the intake restarts the agent.
+    network_mode: "service:intake"
+    pid: host
+    depends_on:
+      intake:
+        condition: service_healthy
+    stop_grace_period: 20s
+    environment:
+      DD_API_KEY: ${DD_API_KEY:-00000000000000000000000000000000}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      # Everything that is not logs (metrics, metadata, check runs) goes to
+      # the intake's 202 sink, so the run is offline. Point it at
+      # https://app.datadoghq.com (with a real DD_API_KEY) to keep metrics real.
+      DD_DD_URL: ${DD_DD_URL:-http://localhost:8282}
+      DD_HOSTNAME: ${DD_HOSTNAME:-aoc-harness}
+      DD_ENV: ${DD_ENV:-aoc-harness}
+      DD_TAGS: ${DD_TAGS:-harness:aoc}
+      DD_LOGS_ENABLED: "true"
+      DD_LOGS_CONFIG_LOGS_DD_URL: http://localhost:8282
+      DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+      DD_LOGS_CONFIG_USE_HTTP: "true"
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: ${DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL:-true}
+      DD_CONTAINER_EXCLUDE_LOGS: "name:aoc-agent name:aoc-intake"
+      DD_LOGS_CONFIG_OPEN_FILES_LIMIT: ${DD_LOGS_CONFIG_OPEN_FILES_LIMIT:-500}
+      DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: ${DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION:-false}
+      DD_TELEMETRY_ENABLED: "true"
+      DD_LOG_LEVEL: ${DD_LOG_LEVEL:-info}
+      DD_APM_ENABLED: "false"
+      DD_PROCESS_CONFIG_PROCESS_COLLECTION_ENABLED: "false"
+      DD_PROCESS_CONFIG_CONTAINER_COLLECTION_ENABLED: "false"
+      DD_REMOTE_CONFIGURATION_ENABLED: "false"
+      DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-false}
+    volumes:
+      - aoc-logs:/var/log/agent-of-chaos:ro
+      - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      # json-file driver log files, so container logs are tailed as files.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Tailing offsets survive an agent restart (dropped by `down -v`).
+      - aoc-agent-run:/opt/datadog-agent/run
+
+  # Plain-text files: <stream>.log with multi-line stack traces.
+  gen-plain:
+    <<: *gen
+    environment:
+      <<: *gen-env
+      AOC_NAME: plain-{host}
+      AOC_LOG_DIR: /var/log/agent-of-chaos/plain-{host}
+      AOC_FORMAT: plain
+
+  # JSON files: <stream>.json.log, one JSON object per line.
+  gen-json:
+    <<: *gen
+    environment:
+      <<: *gen-env
+      AOC_NAME: json-{host}
+      AOC_LOG_DIR: /var/log/agent-of-chaos/json-{host}
+      AOC_FORMAT: json
+
+  # Opt-in (docker compose --profile stdout up): logs to stdout, collected
+  # through the docker log driver instead of files.
+  gen-stdout:
+    <<: *gen
+    profiles: ["stdout"]
+    environment:
+      <<: *gen-env
+      AOC_NAME: stdout-{host}
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"aoc-stdout","log_processing_rules":[{"type":"multi_line","name":"timestamp_start","pattern":"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"}]}]'
+
+volumes:
+  aoc-logs:
+  aoc-agent-run:

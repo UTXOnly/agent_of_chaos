@@ -1,0 +1,8 @@
+name: high-compression
+description: Stress the encoder — JSON + plain, 20% stack traces, 12% oversized lines, 256 KiB rotation. Compare wire bytes and compression ratio across compression settings (DD_LOGS_CONFIG_COMPRESSION_KIND=gzip|zstd).
+duration: 3m
+warmup: 20s
+drain: 45s
+generators:
+  gen-plain: { streams: 12, rate: 15000, rotate-bytes: 256KiB, multiline-rate: 0.2, wide-line-rate: 0.12 }
+  gen-json:  { streams: 12, rate: 15000, rotate-bytes: 256KiB, multiline-rate: 0.2, wide-line-rate: 0.12 }
