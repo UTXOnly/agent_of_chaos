@@ -56,16 +56,17 @@ b:
     DD_LOGS_CONFIG_TAG_FILTERS: '{"exclude":["env:*","dirname:*"]}'
 ```
 
-`aoc ab` runs the profile against `a`, tears everything down, runs it
-against `b` (`runs: 2` alternates a, b, a, b and takes medians), and writes
-an **investigation brief** rather than a wall of metrics:
+`aoc ab` runs the profile against `a` and `b` at the same time, each in its
+own compose project (`parallel: false` or `--sequential` runs them one after
+the other; `runs: 2` repeats the round and takes medians), and writes an
+**investigation brief** rather than a wall of metrics:
 
 | file | what |
 |---|---|
 | `findings.md` | **the brief.** What we tested (images, versions, commits, what only one side had, the workload); what differed (regressions beyond `threshold`, 10 % by default, improvements, and only the rows that moved); where — per regressed topic a one-sentence reading derived from the numbers ("the container grew through page cache, not process memory"), the tables that explain it (anon vs page cache, processes that moved, the agent's own CPU/heap/allocation profiles diffed **function by function** with each mover's `file:line`), pipeline utilization, retries, the log's repeated errors; the profiles; and **the code** — each mover located in the agent's source at the tested commit, with whether its file changed between the two builds (given a checkout, `source:`). Your conclusion goes on top once you have one |
 | `compare.md` | every metric side by side, the per-process table, the agent's telemetry counters |
 | `ab.json`, `findings.json` | the same for tooling: images, digests, versions, windows, findings, file paths, notebook URL |
-| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the Datadog notebook in the same order — tested, differed, conclusion, where, profiles and code — with each side's **profiler embedded** (same-origin iframe of the flame graph explorer, scoped to the run) and only the charts that bear on what moved, **both agents overlaid** (the earlier run `timeshift`ed onto the later one) |
+| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the Datadog notebook in the same order — tested, differed, conclusion, where, profiles and code — with the profiler's **comparison view embedded** (same-origin iframes: `a`'s flame graph beside `b`'s for CPU, heap and allocations, then one per mover focused on that function) and only the charts that bear on what moved, **both agents overlaid** (the earlier run `timeshift`ed onto the later one) |
 | `a/`, `b/` (`a-2/`, `b-2/`, …) | a full [run directory](#what-a-run-writes) per side and round, including `profiles/` — the agent's pprof uploads over the window |
 | `aoc.yaml` | the config that ran |
 

@@ -367,8 +367,9 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		}
 	}
 
-	// 4. The profiles and the code behind the movers, then each side's
-	// flame graph (same-origin iframe of the profiler, scoped to the run).
+	// 4. The profiles and the code behind the movers, then the profiler's
+	// comparison view (same-origin iframes): a's flame graph beside b's for
+	// CPU, live heap and allocations, then one per mover, focused on it.
 	if f != nil {
 		var pc strings.Builder
 		pc.WriteString("## Profiles\n\n" + findings.ProfilesMarkdown(f, in))
@@ -377,11 +378,7 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		}
 		nb.Cells = append(nb.Cells, markdown(pc.String()))
 	}
-	for _, c := range cols {
-		if len(c.Runs) > 0 {
-			nb.Cells = append(nb.Cells, iframe(findings.ProfileURL(c.Runs[0], o.AppURL, o.Margin, "cpu-time")))
-		}
-	}
+	nb.Cells = append(nb.Cells, compareCells(f, cols, &o)...)
 
 	// 5. The session in real time, then the charts that bear on what moved.
 	if o.Experiment != "" {
@@ -434,6 +431,31 @@ func chartsFor(topics []string) []int {
 		return []int{5, 6}
 	}
 	return out
+}
+
+// compareCells are the side-by-side flame graphs: the whole agent for
+// each profile type the profiler has, then one focused on each mover
+// the brief located. Each is headed by a markdown cell that says what
+// the two panes are.
+func compareCells(f *findings.Result, cols []report.Column, o *Options) []Cell {
+	if len(cols) < 2 || len(cols[0].Runs) == 0 || len(cols[1].Runs) == 0 {
+		return nil
+	}
+	a, b := cols[0].Runs[0], cols[1].Runs[0]
+	var cells []Cell
+	head := fmt.Sprintf("## Flame graphs, side by side\n\nA = **%s** (`run:%s`), B = **%s** (`run:%s`), each over its own window. Frames only one side has are coloured; the bar under B is the difference. Filter or focus inside the pane, or open it in the profiler with ↗.\n", cols[0].Name, a.Name, cols[1].Name, b.Name)
+	cells = append(cells, markdown(head))
+	for _, pt := range []struct{ typ, label string }{{"cpu-time", "CPU"}, {"heap-live-size", "heap live size"}, {"alloc-size", "allocations"}} {
+		cells = append(cells, markdown(fmt.Sprintf("### %s — whole agent\n", pt.label)), iframe(findings.CompareURL(a, b, o.AppURL, o.Margin, pt.typ, "")))
+	}
+	if f == nil {
+		return cells
+	}
+	for _, m := range findings.Movers(f) {
+		cells = append(cells, markdown(fmt.Sprintf("### `%s` — %s, %s\n\nFocused on `%s`: the stacks under it on each side.\n", m.Function, m.View, m.Delta, m.Focus)),
+			iframe(findings.CompareURL(a, b, o.AppURL, o.Margin, m.ProfileType, m.Focus)))
+	}
+	return cells
 }
 
 // iframe embeds a same-origin Datadog page (the profiler allows framing

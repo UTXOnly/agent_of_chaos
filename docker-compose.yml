@@ -17,6 +17,9 @@
 #   docker compose --profile stdout up -d        add a generator that logs to stdout (docker log driver path)
 #   docker compose up -d --scale gen-plain=4     more generator containers
 #   AOC_PROFILE_FORWARD=off                      keep the agent's profile uploads local, do not forward to Datadog
+#   AOC_STACK=aoc-b AOC_INTAKE_PORT=8283 AOC_TCP_PORT=10517 docker compose -p aoc-b up -d
+#                                                a second, independent stack beside the first (aoc ab runs
+#                                                both sides this way, alongside each other)
 #   -f docker-compose.offline.yml               no API key: metrics swallowed by the intake, nothing leaves the host
 #
 # `aoc run --profile profiles/<name>.yaml` drives all of this for you, and
@@ -62,14 +65,14 @@ services:
       context: .
       args:
         VERSION: ${AOC_VERSION:-dev}
-    container_name: aoc-intake
+    container_name: ${AOC_STACK:-aoc}-intake
     # Root only so it can read docker.sock for the agent's container CPU/memory.
     user: "0:0"
     command:
       - intake
       - --name=${AOC_RUN_NAME:-local}
       - --agent-telemetry=http://localhost:5000/telemetry
-      - --docker-container=aoc-agent
+      - --docker-container=${AOC_STACK:-aoc}-agent
       - --agent-image=${DD_AGENT_IMAGE:-datadog/agent:7}
       - --dd-tags=${AOC_DD_TAGS:-harness:aoc}
       # The agent's profiler uploads arrive here (see DD_APM_PROFILING_DD_URL
@@ -94,7 +97,7 @@ services:
 
   datadog-agent:
     image: ${DD_AGENT_IMAGE:-datadog/agent:7}
-    container_name: aoc-agent
+    container_name: ${AOC_STACK:-aoc}-agent
     # Share the intake's network namespace: the agent reaches the intake at
     # localhost:8282 and the intake scrapes the agent's localhost-only
     # telemetry endpoint (:5000). Restarting the intake restarts the agent.
@@ -107,7 +110,7 @@ services:
     environment:
       DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env (or use docker-compose.offline.yml)}
       DD_SITE: ${DD_SITE:-datadoghq.com}
-      DD_HOSTNAME: ${DD_HOSTNAME:-aoc-harness}
+      DD_HOSTNAME: ${DD_HOSTNAME:-${AOC_STACK:-aoc}-harness}
       DD_ENV: ${DD_ENV:-aoc-harness}
       # run:<name> makes the agent's own metrics/profiles line up with the
       # intake's aoc.* metrics in the notebook.
@@ -117,7 +120,11 @@ services:
       DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
       DD_LOGS_CONFIG_USE_HTTP: "true"
       DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: ${DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL:-true}
-      DD_CONTAINER_EXCLUDE_LOGS: "name:aoc-agent name:aoc-intake"
+      # Only this stack's generators: another stack's containers (a parallel
+      # A/B side) and whatever else runs on the host are not this agent's
+      # workload. Include rules win over exclude rules.
+      DD_CONTAINER_EXCLUDE_LOGS: "name:.*"
+      DD_CONTAINER_INCLUDE_LOGS: "name:^${AOC_STACK:-aoc}-gen-"
       DD_LOGS_CONFIG_OPEN_FILES_LIMIT: ${DD_LOGS_CONFIG_OPEN_FILES_LIMIT:-500}
       DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: ${DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION:-false}
       DD_TELEMETRY_ENABLED: "true"

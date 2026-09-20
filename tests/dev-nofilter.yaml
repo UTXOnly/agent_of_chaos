@@ -1,0 +1,7 @@
+# The tag-filtering build with the feature off: is the build itself any
+# different from the release when nothing is filtered?
+name: dev-nofilter
+profile: profiles/baseline.yaml
+duration: 5m
+a: { image: datadog/agent:7, name: release }
+b: { image: datadog/agent-dev:log-tag-filtering-9e35a50b-full, name: dev, pull: never }

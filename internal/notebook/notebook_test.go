@@ -65,9 +65,10 @@ func TestForAB(t *testing.T) {
 	b.WindowStart, b.WindowEnd = a.WindowStart.Add(5*time.Minute), a.WindowEnd.Add(5*time.Minute)
 	cols := []report.Column{{Name: "release", Runs: []*report.Report{a}}, {Name: "candidate", Runs: []*report.Report{b}}}
 	nb := ForAB("aoc A/B exp", cols, Options{Experiment: "exp", AppURL: "https://x.datadoghq.com"})
-	// Without findings: header, two embedded profilers, timeline, the two
-	// default charts (CPU, memory), notes.
-	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+2+1+2+1 {
+	// Without findings: header, the side-by-side profiler (a heading, then
+	// a caption and an iframe for CPU, heap and allocations), timeline, the
+	// two default charts (CPU, memory), notes.
+	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+7+1+2+1 {
 		t.Fatalf("name=%q cells=%d", nb.Name, len(nb.Cells))
 	}
 	// The window is the later run's, ±60 s.
@@ -80,7 +81,10 @@ func TestForAB(t *testing.T) {
 		`"alias": "release: container (docker stats via intake)"`,
 		`"query": "avg:aoc.agent.container.cpu_percent{run:exp-b}"`, // the anchor is not shifted
 		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,  // the real-time timeline
-		`"type": "iframe"`, "run%3Aexp-b\\u0026profile_type=cpu-time\\u0026start=", // json escapes & in the body
+		`"type": "iframe"`, // json escapes & in the body: b is the main query, a the compare_query_A
+		"/profiling/comparison?query=service%3Adatadog-agent+run%3Aexp-b\\u0026start=",
+		"compare_query_A=service%3Adatadog-agent+run%3Aexp-a\\u0026compare_start_A=",
+		"profile_type=heap-live-size\\u0026viz=flame_graph",
 		"source%3Aaoc+run%3Aexp-b",
 	} {
 		if !strings.Contains(s, want) {
@@ -98,13 +102,13 @@ func TestForAB(t *testing.T) {
 	}
 
 	// With findings: tested/differed header, the conclusion, one cell per
-	// regressed topic, profiles+code, the iframes, the timeline, the
-	// topic's charts, notes.
+	// regressed topic, profiles+code, the side-by-side profiler (no
+	// movers without profiles), the timeline, the topic's charts, notes.
 	b.Resources.ContainerMemMax, a.Resources.ContainerMemMax = 600e6, 200e6
 	b.Resources.ContainerAnonMax, a.Resources.ContainerAnonMax = 580e6, 180e6
 	res := findings.Build(findings.Input{Experiment: "exp", Cols: cols, Threshold: 10, Conclusion: "It is the python runner."})
 	nb = ForAB("aoc A/B exp", cols, Options{Experiment: "exp", Findings: res})
-	if len(nb.Cells) != 1+1+1+1+2+1+3+1 {
+	if len(nb.Cells) != 1+1+1+1+7+1+3+1 {
 		t.Fatalf("cells with one regression topic = %d", len(nb.Cells))
 	}
 	s = string(nb.Body())
