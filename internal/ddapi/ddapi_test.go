@@ -76,4 +76,7 @@ func TestSubmitAndNotebook(t *testing.T) {
 	if AppURL("us3.datadoghq.com") != "https://us3.datadoghq.com" || AppURL("datadoghq.eu") != "https://app.datadoghq.eu" {
 		t.Error("AppURL")
 	}
+	if AppURLFor("datadoghq.com", "bhartford", "") != "https://bhartford.datadoghq.com" || AppURLFor("datadoghq.com", "x", "https://custom.example/") != "https://custom.example" {
+		t.Error("AppURLFor")
+	}
 }

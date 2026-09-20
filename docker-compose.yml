@@ -116,13 +116,22 @@ services:
       DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: ${DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION:-false}
       DD_TELEMETRY_ENABLED: "true"
       DD_LOG_LEVEL: ${DD_LOG_LEVEL:-info}
-      DD_APM_ENABLED: "false"
+      # Internal profiles are uploaded through the trace-agent (localhost:8126),
+      # so APM must stay on for profiling to work. DD_APM_ENABLED=false gives
+      # the leanest container if you don't need profiles.
+      DD_APM_ENABLED: ${DD_APM_ENABLED:-true}
       DD_PROCESS_CONFIG_PROCESS_COLLECTION_ENABLED: "false"
       DD_PROCESS_CONFIG_CONTAINER_COLLECTION_ENABLED: "false"
       DD_REMOTE_CONFIGURATION_ENABLED: "false"
       # The agent's own CPU/heap profiles land in the Continuous Profiler
-      # (service:datadog-agent, host:${DD_HOSTNAME}).
+      # (service:datadog-agent, host:${DD_HOSTNAME}, tag run:<name>). The
+      # agent's default period is 5 minutes, too coarse for short runs; one
+      # profile per minute with a full-minute CPU sample matches dd-trace-go's
+      # defaults. Anything shorter than the run's last period is not uploaded.
       DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-true}
+      DD_INTERNAL_PROFILING_PERIOD: ${DD_INTERNAL_PROFILING_PERIOD:-60s}
+      DD_INTERNAL_PROFILING_CPU_DURATION: ${DD_INTERNAL_PROFILING_CPU_DURATION:-60s}
+      DD_INTERNAL_PROFILING_EXTRA_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local}"
     volumes:
       - aoc-logs:/var/log/agent-of-chaos:ro
       - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro

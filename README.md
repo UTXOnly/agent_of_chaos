@@ -56,7 +56,8 @@ a measured window, stops the generators, drains, and writes
 Meanwhile in Datadog: `aoc.*` metrics and `source:aoc` events tagged
 `run:baseline`, the agent's own `docker.*`/`system.*`/`datadog.agent.*`
 metrics tagged `run:baseline` (host tag), and its CPU/heap profiles in the
-Continuous Profiler (`service:datadog-agent`).
+Continuous Profiler (`service:datadog-agent run:baseline`, one profile per
+minute).
 
 Then:
 
@@ -98,8 +99,9 @@ about a run without any of this tooling:
 - "compare `aoc.agent.process.cpu_percent` between `run:baseline` and
   `run:candidate`"
 - "what happened around the `source:aoc run:candidate` events?"
-- "show the flame graph for `service:datadog-agent host:aoc-harness` during
-  run candidate" (needs `DD_INTERNAL_PROFILING_ENABLED=true`, the default)
+- "show the CPU flame graph for `service:datadog-agent run:candidate`
+  filtered to `logs` frames" — the agent's internal profiler is on by default
+  and uploads one profile per minute
 
 The metric catalog is in [docs/datadog.md](docs/datadog.md).
 
@@ -268,6 +270,14 @@ Dependencies: `klauspost/compress` (gzip/zstd) and `yaml.v3`.
   `aoc.stream.*` pair per stream with problems), each tagged with the run
   name, so every run creates a new set of custom-metric timeseries. Reuse
   names when you don't need a new record.
+* **Links to your org**: set `DD_SUBDOMAIN=<yours>` (or `DD_APP_URL`) in
+  `.env` so notebook links open your subdomain rather than
+  `app.datadoghq.com`.
+* **Profiling cadence**: the agent's internal profiler defaults to one
+  profile every 5 minutes; the compose sets `DD_INTERNAL_PROFILING_PERIOD`
+  and `DD_INTERNAL_PROFILING_CPU_DURATION` to 60 s (30 s works for very short
+  runs). Profiles upload through the trace-agent, so `DD_APM_ENABLED` must
+  stay on; the last partial period of a run is not uploaded.
 * **Rebuilding the image while the stack runs**: the agent shares the
   intake's network namespace. If you recreate the intake by hand, recreate
   the agent too (`docker compose up -d --force-recreate datadog-agent`).

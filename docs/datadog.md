@@ -51,9 +51,20 @@ series and a few `go_*`).
 
 Besides these, the agent ships its usual metrics with the `run:` host tag
 from `DD_TAGS`: `docker.cpu.usage{container_name:aoc-agent}`,
-`docker.mem.rss`, `system.*`, `datadog.agent.*` — and, with
-`DD_INTERNAL_PROFILING_ENABLED=true`, CPU/heap profiles under
-`service:datadog-agent`.
+`docker.mem.rss`, `system.*`, `datadog.agent.*`.
+
+## Profiles
+
+With `DD_INTERNAL_PROFILING_ENABLED=true` (the compose default) the core
+agent profiles itself and uploads CPU, heap, alloc and goroutine profiles
+under `service:datadog-agent`, tagged with `DD_INTERNAL_PROFILING_EXTRA_TAGS`
+(`run:<name>`). Cadence is `DD_INTERNAL_PROFILING_PERIOD` (agent default 5 m;
+compose default 60 s) with `DD_INTERNAL_PROFILING_CPU_DURATION` of CPU
+sampling per period. Uploads go through the trace-agent on `localhost:8126`
+(the dd-trace-go profiler ignores `DD_API_KEY`), so `DD_APM_ENABLED` must be
+true; the period in progress when the agent stops is lost. Query with the
+MCP's `explore_profiling_flame_graph` (`service:datadog-agent run:<name>`,
+`frameRegexFilter: logs`) or `get_profiling_timeseries` grouped by `run`.
 
 ## Events (`source:aoc`)
 

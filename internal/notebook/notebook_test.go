@@ -19,7 +19,7 @@ func sample(name string) *report.Report {
 }
 
 func TestForRun(t *testing.T) {
-	nb := ForRun(sample("baseline"), Options{Site: "datadoghq.com"})
+	nb := ForRun(sample("baseline"), Options{Site: "datadoghq.com", AppURL: "https://bhartford.datadoghq.com"})
 	if len(nb.Cells) != len(runCharts)+2 {
 		t.Fatalf("cells = %d", len(nb.Cells))
 	}
@@ -33,7 +33,7 @@ func TestForRun(t *testing.T) {
 		t.Errorf("attrs: %v %v", attrs["name"], attrs["status"])
 	}
 	s := string(body)
-	for _, want := range []string{"run:baseline", "aoc.intake.logs_per_sec{run:baseline}", "docker.cpu.usage{run:baseline,container_name:aoc-agent}", `"time": {`, "profiling/explorer"} {
+	for _, want := range []string{"run:baseline", "aoc.intake.logs_per_sec{run:baseline}", "docker.cpu.usage{run:baseline,container_name:aoc-agent}", `"time": {`, "https://bhartford.datadoghq.com/profiling/explorer?query=service%3Adatadog-agent+run%3Abaseline"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("body missing %q", want)
 		}

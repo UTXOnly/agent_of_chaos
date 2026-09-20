@@ -472,7 +472,7 @@ func runRun(args []string) int {
 	} else {
 		logf("stack left running (--keep); intake at %s", *intake)
 	}
-	nbRes, nbErr := makeNotebook(context.Background(), []*report.Report{r}, notebook.Options{Site: *ddSite}, filepath.Join(resultsDir, "notebook.json"), ddapi.FromEnv(), !*mkNotebook)
+	nbRes, nbErr := makeNotebook(context.Background(), []*report.Report{r}, notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv()}, filepath.Join(resultsDir, "notebook.json"), ddapi.FromEnv(), !*mkNotebook)
 	fmt.Fprintf(os.Stderr, "\nresults in %s (report.md, report.json, timeseries.csv, notebook.json, agent-status.txt, agent.log)\n\n", resultsDir)
 	printVerdict(r)
 	switch {

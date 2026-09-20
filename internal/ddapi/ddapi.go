@@ -50,16 +50,35 @@ func (c *Client) apiURL(path string) string {
 	return "https://api." + c.Site + path
 }
 
-// AppURL is the browser-facing base URL for the site.
+// AppURL is the browser-facing base URL for the site: https://app.<site>
+// for the main sites, https://<site> for the regional ones.
 func AppURL(site string) string {
+	return AppURLFor(site, "", "")
+}
+
+// AppURLFor resolves the browser URL with an org's custom subdomain
+// (DD_SUBDOMAIN=bhartford → https://bhartford.datadoghq.com) or a full
+// override (DD_APP_URL), which wins when set.
+func AppURLFor(site, subdomain, override string) string {
+	if override != "" {
+		return strings.TrimRight(override, "/")
+	}
 	if site == "" {
 		site = "datadoghq.com"
+	}
+	if subdomain != "" {
+		return "https://" + subdomain + "." + site
 	}
 	switch site {
 	case "datadoghq.com", "datadoghq.eu", "ddog-gov.com":
 		return "https://app." + site
 	}
 	return "https://" + site
+}
+
+// AppURLFromEnv is AppURLFor with DD_SITE, DD_SUBDOMAIN and DD_APP_URL.
+func AppURLFromEnv() string {
+	return AppURLFor(os.Getenv("DD_SITE"), os.Getenv("DD_SUBDOMAIN"), os.Getenv("DD_APP_URL"))
 }
 
 // Error is a non-2xx response.
@@ -211,5 +230,5 @@ func (c *Client) CreateNotebook(ctx context.Context, body []byte) (int64, string
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return 0, "", fmt.Errorf("decode notebook response: %w", err)
 	}
-	return resp.Data.ID, fmt.Sprintf("%s/notebook/%d", AppURL(c.Site), resp.Data.ID), nil
+	return resp.Data.ID, fmt.Sprintf("%s/notebook/%d", AppURLFor(c.Site, os.Getenv("DD_SUBDOMAIN"), os.Getenv("DD_APP_URL")), resp.Data.ID), nil
 }

@@ -29,6 +29,7 @@ type Notebook struct {
 // Options tune the generated notebook.
 type Options struct {
 	Site   string // for links
+	AppURL string // browser base URL (custom subdomain); default derived from Site
 	Name   string // notebook title override
 	Prefix string // metric prefix, default aoc
 	// Margin widens the time window on both sides (default 60s).
@@ -48,6 +49,9 @@ func (o *Options) defaults() {
 	}
 	if o.Site == "" {
 		o.Site = "datadoghq.com"
+	}
+	if o.AppURL == "" {
+		o.AppURL = ddapi.AppURL(o.Site)
 	}
 }
 
@@ -265,7 +269,7 @@ func ForCompare(reports []*report.Report, o Options) *Notebook {
 }
 
 func digDeeper(r *report.Report, o *Options) string {
-	app := ddapi.AppURL(o.Site)
+	app := o.AppURL
 	from, to := r.WindowStart.Add(-o.Margin).UnixMilli(), r.WindowEnd.Add(o.Margin).UnixMilli()
 	host := o.AgentHost
 	if host == "" {
@@ -277,10 +281,11 @@ func digDeeper(r *report.Report, o *Options) string {
 		r.Name, o.Prefix, o.Prefix, o.Prefix, o.Prefix, o.Prefix, r.Name)
 	fmt.Fprintf(&b, "- Events for this run (window, faults, generators): [%s/event/explorer?query=%s&from_ts=%d&to_ts=%d](%s/event/explorer?query=%s&from_ts=%d&to_ts=%d)\n",
 		app, url.QueryEscape("source:aoc run:"+r.Name), from, to, app, url.QueryEscape("source:aoc run:"+r.Name), from, to)
+	profQ := url.QueryEscape("service:datadog-agent run:" + r.Name)
+	fmt.Fprintf(&b, "- Agent CPU/heap profiles for this run (`DD_INTERNAL_PROFILING_ENABLED=true`, uploaded through the trace-agent): [%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true](%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true) — or ask the MCP for the flame graph of `service:datadog-agent run:%s` filtered to `logs` frames\n",
+		app, profQ, from, to, app, profQ, from, to, r.Name)
 	if host != "" {
 		fmt.Fprintf(&b, "- Agent host in Infrastructure: [%s/infrastructure?host=%s](%s/infrastructure?host=%s)\n", app, host, app, host)
-		fmt.Fprintf(&b, "- Agent continuous profiles (needs `DD_INTERNAL_PROFILING_ENABLED=true`): [%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true](%s/profiling/explorer?query=%s&from_ts=%d&to_ts=%d&paused=true)\n",
-			app, url.QueryEscape("service:datadog-agent host:"+host), from, to, app, url.QueryEscape("service:datadog-agent host:"+host), from, to)
 	}
 	fmt.Fprintf(&b, "- Metrics Explorer: [%s/metric/explorer](%s/metric/explorer) → search `%s.` and filter `run:%s`\n", app, app, o.Prefix, r.Name)
 	fmt.Fprintf(&b, "\nThe full report (`report.md` / `report.json`) and the per-second `timeseries.csv` live in the results directory of this run; `aoc compare` diffs two of them.\n")

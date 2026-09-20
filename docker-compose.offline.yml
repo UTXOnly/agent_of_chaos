@@ -13,3 +13,4 @@ services:
     environment:
       DD_DD_URL: http://localhost:8282
       DD_INTERNAL_PROFILING_ENABLED: "false"
+      DD_APM_ENABLED: "false"

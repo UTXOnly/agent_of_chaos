@@ -106,6 +106,8 @@ func runNotebook(args []string) int {
 	fs.Var(&results, "results", "results directory (or report.json); repeat to compare")
 	name := fs.Str("name", "", "notebook title (default: derived from the run names)")
 	site := fs.Str("site", envOr("DD_SITE", "datadoghq.com"), "Datadog site (env DD_SITE)")
+	subdomain := fs.Str("subdomain", os.Getenv("DD_SUBDOMAIN"), "your org's custom subdomain for links, e.g. bhartford (env DD_SUBDOMAIN)")
+	appURL := fs.Str("app-url", os.Getenv("DD_APP_URL"), "full browser base URL for links, overrides --site/--subdomain (env DD_APP_URL)")
 	apiKey := fs.Str("api-key", os.Getenv("DD_API_KEY"), "API key (env DD_API_KEY)")
 	appKey := fs.Str("app-key", os.Getenv("DD_APP_KEY"), "application key (env DD_APP_KEY); required to create, not to write the JSON")
 	out := fs.Str("out", "", "where to write the notebook JSON (default <first results dir>/notebook.json)")
@@ -140,7 +142,7 @@ func runNotebook(args []string) int {
 		}
 	}
 	client := ddapi.New(*site, *apiKey, *appKey)
-	opts := notebook.Options{Site: *site, Name: *name, Prefix: *prefix, AgentContainer: *agentContainer, AgentHost: *agentHost}
+	opts := notebook.Options{Site: *site, AppURL: ddapi.AppURLFor(*site, *subdomain, *appURL), Name: *name, Prefix: *prefix, AgentContainer: *agentContainer, AgentHost: *agentHost}
 	res, err := makeNotebook(context.Background(), reports, opts, outFile, client, *dryRun)
 	if err != nil {
 		return fail("notebook: %v", err)
