@@ -1,0 +1,8 @@
+name: rotation-churn
+description: Rotate constantly — 128 KiB files, copytruncate-style rotation on the plain half, rename rotation on the JSON half. Every missing record here is a rotation race; the streams table shows which mode loses.
+duration: 3m
+warmup: 20s
+drain: 45s
+generators:
+  gen-plain: { streams: 8, rate: 10000, rotate-bytes: 128KiB, rotate-keep: 2, rotate-mode: truncate }
+  gen-json:  { streams: 8, rate: 10000, rotate-bytes: 128KiB, rotate-keep: 2, rotate-mode: rename }

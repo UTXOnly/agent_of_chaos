@@ -1,0 +1,8 @@
+name: baseline
+description: Steady mixed workload — 8 plain-text streams + 8 JSON streams at 5k lines/s each generator, 5% stack traces, 2 MiB rotation. The reference point every other profile is compared against.
+duration: 3m
+warmup: 20s
+drain: 45s
+generators:
+  gen-plain: { streams: 8, rate: 5000 }
+  gen-json:  { streams: 8, rate: 5000 }

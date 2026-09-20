@@ -1,11 +1,11 @@
 .git
 .gitignore
-__pycache__
-*.py[cod]
 logs
-bytecheck_run
+results
 .env
 .env.*
 *.md
-docker-compose.yml
+!profiles/*.md
+docker-compose*.yml
 .DS_Store
+scripts

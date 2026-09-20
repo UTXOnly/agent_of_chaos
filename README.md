@@ -1,162 +1,311 @@
-# agent_of_chaos
+# agent_of_chaos — a testing harness for the Datadog Logs Agent
 
-Datadog Logs Agent stress tester. Spawns configurable service workers that write rotating plain-text and JSON log pairs for tailing by the Datadog Agent.
+Generate log volume with exact accounting, point any Datadog Agent at a fake
+logs intake instead of Datadog, and record the outcome **in Datadog** — as
+`aoc.*` metrics and events, a notebook per run, and the agent's own metrics
+and profiles — so every experiment is shareable, comparable and queryable
+(by hand or through the Datadog MCP).
 
-## Quick start (Docker)
-
-```bash
-# Build and run with docker compose (logs land in ./logs/)
-docker compose up --build
-
-# Or run the image directly
-docker build -t agent-of-chaos .
-docker run --rm -v "$(pwd)/logs:/var/log/agent-of-chaos" \
-  -e AOCH_MODE=steady -e AOCH_SERVICES=10 \
-  agent-of-chaos
+```
+ ┌──────────────────┐  files / stdout   ┌──────────────────┐  HTTP (gzip/zstd)  ┌──────────────────┐
+ │  aoc generate    │ ────────────────▶ │  Datadog Agent   │ ─────────────────▶ │  aoc intake      │
+ │  N streams,      │  aoc=gen/stream/  │  under test      │  /api/v2/logs      │  fake intake +   │
+ │  rate-paced,     │  seq per record   │  (any image)     │                    │  delivery ledger │
+ │  rotation, …     │ ── stats push ───────────────────────────────────────────▶ │  + faults        │
+ └──────────────────┘                   └────────┬─────────┘ ◀── /telemetry ────┴────────┬─────────┘
+                                                 │ metrics, profiles (run:<name>)         │ aoc.* metrics, events (run:<name>)
+                                                 ▼                                        ▼
+                                          ┌────────────────────────────────────────────────────┐
+                                          │  Datadog: metrics · events · notebook per run · MCP │
+                                          └────────────────────────────────────────────────────┘
 ```
 
-Point the Datadog Agent `logs` integration at the mounted directory (host path `./logs`, container path `/var/log/agent-of-chaos`).
+Every generated record carries a sequence marker. The intake keeps a
+per-stream ledger of what arrived, so **missing, duplicated and reordered
+records are counted exactly**, not estimated from byte totals. It measures
+written→received latency per log, scrapes the agent's own `/telemetry`
+counters, samples the agent container's CPU/memory, injects faults (429/5xx,
+dropped connections, latency, throttled uplink) and submits all of it to
+Datadog every 10 s, tagged `run:<name>`.
 
-Stop with `Ctrl+C` or `docker compose down`.
+One binary, `aoc`, plays every role. Logs never leave the host.
 
-## Quick start (local)
-
-Requires Python 3.9+ (stdlib only — no pip install).
-
-```bash
-python3 agent_of_chaos.py --mode steady --services 10
-```
-
-Logs are written to `./logs/` by default (override with `--log-dir` or `AOCH_LOG_DIR`).
-
-## Execution modes
-
-| Mode | Description |
-|------|-------------|
-| `steady` | Constant load; all services start immediately |
-| `ramp` | Start small, add services gradually until target |
-| `chaos` | Services randomly crash and restart |
-| `spike` | Steady baseline plus periodic coordinated volume spikes |
-| `scenario` | Multi-phase scripted run (built-in or custom JSON) |
-| `pulse` | Repeating ramp → peak → cooldown → rest cycle |
+## Quick start
 
 ```bash
-python3 agent_of_chaos.py --mode chaos --services 8 --chaos-crash-rate 3
-python3 agent_of_chaos.py --mode scenario --scenario business-day --scenario-speed 3
-python3 agent_of_chaos.py --mode pulse --pulse-ramp 300 --pulse-peak 120 --pulse-rest 600
+cp .env.example .env          # DD_API_KEY (required), DD_APP_KEY (for notebooks), DD_SITE
+make build                    # ./bin/aoc
+
+./bin/aoc run --profile profiles/baseline.yaml --name baseline --agent-image datadog/agent:7
 ```
 
-## Benchmark suite
+That one command: builds the image, starts the fake intake and the agent
+(sharing a network namespace so the agent's localhost-only telemetry is
+scrapeable), waits for `agent health`, starts the generators, warms up, opens
+a measured window, stops the generators, drains, and writes
+`results/baseline/`:
 
-Deterministic, byte-identical logs for a fixed seed + config. See `benchmark_profiles.json`.
+| file | what |
+|---|---|
+| `report.md` / `report.json` | the full report (delivery ledger, throughput, latency, resources, HTTP, tags, streams, agent telemetry deltas, per-minute table) |
+| `notebook.json` | the Datadog notebook for the run (created for you when `DD_APP_KEY` is set) |
+| `timeseries.csv` | one row per second |
+| `agent-status.txt`, `agent.log`, `intake.log`, `gen-*.log` | what the containers said |
+| `profile.yaml`, `compose.override.yml` | exactly what ran |
+
+Meanwhile in Datadog: `aoc.*` metrics and `source:aoc` events tagged
+`run:baseline`, the agent's own `docker.*`/`system.*`/`datadog.agent.*`
+metrics tagged `run:baseline` (host tag), and its CPU/heap profiles in the
+Continuous Profiler (`service:datadog-agent run:baseline`, one profile per
+minute).
+
+Then:
 
 ```bash
-python3 agent_of_chaos.py \
-  --benchmark-config benchmark_profiles.json \
-  --benchmark profile-high-throughput
+./bin/aoc run --profile profiles/baseline.yaml --name candidate --agent-image datadog/agent-dev:my-build
+./bin/aoc compare results/baseline results/candidate            # Markdown delta table
+./bin/aoc notebook --results results/baseline --results results/candidate   # one notebook, both runs
 ```
 
-In Docker:
+## Notebooks
+
+`aoc notebook` builds a **report** notebook from `report.json`: a findings
+summary (delivery verdict, throughput, latency, resources, faults), then
+timeseries cells over the run's absolute window — generated vs received,
+delivery ledger, latency, wire vs decompressed bytes, responses by status,
+agent CPU and memory (intake-observed *and* from the docker integration),
+the agent's own logs-pipeline telemetry (bytes sent, destination responses
+by status, pipeline utilization, retries), tags per log, faults, per
+generator — and a "dig deeper" cell with the metric names, event and
+profiler links, and MCP prompts.
+
+With several `--results` it writes the `aoc compare` table first and then
+each run's key charts pinned to that run's own time window, so two agent
+builds sit in one notebook.
+
+It needs `DD_APP_KEY` to create the notebook. Without one it still writes
+`notebook.json` (name, absolute window, cells) — hand that to the Datadog
+MCP's `create_datadog_notebook`, or set the key and run it again. `aoc run`
+creates the notebook automatically when the key is present (`--notebook` to
+force, or write only).
+
+## Investigating with the Datadog MCP
+
+Everything is a normal metric or event, so the MCP can answer questions
+about a run without any of this tooling:
+
+- "query `aoc.intake.latency.e2e.p99` and `aoc.gen.records_per_sec` for
+  `run:candidate` and explain the spikes"
+- "compare `aoc.agent.process.cpu_percent` between `run:baseline` and
+  `run:candidate`"
+- "what happened around the `source:aoc run:candidate` events?"
+- "show the CPU flame graph for `service:datadog-agent run:candidate`
+  filtered to `logs` frames" — the agent's internal profiler is on by default
+  and uploads one profile per minute
+
+The metric catalog is in [docs/datadog.md](docs/datadog.md).
+
+## What gets measured
+
+| question | how |
+|---|---|
+| Did everything arrive? | Per-stream ledger from the `aoc=<gen>/<stream>/<seq>` marker: unique, **missing**, **duplicates**, out of order, first missing seq ranges (gaps line up with rotations). Generators push their own counters, so "generated" is known independently of what arrived. |
+| Was multiline aggregation right? | Traces written vs multiline logs received; **orphan continuation lines** = stack-trace lines the agent shipped as separate logs. |
+| How long did it take? | **written → received** per log (timestamp inside the line), and **agent encode → received** (the agent's `timestamp` field), as p50/p90/p99/p99.9/max. |
+| What did it cost? | Agent **container CPU/memory** (Docker API), **core agent process CPU/RSS** (from the agent's `process_*` telemetry), **CPU seconds per 1M logs**, wire bytes vs decompressed bytes (compression ratio), bytes/tags per log. |
+| What did the agent do? | Every `logs*` series from the agent's `/telemetry` endpoint — `logs__bytes_sent`, `logs__sender_latency`, `logs__rotations_nix`, `logs_component_utilization__ratio`, … — as deltas over the window and as `aoc.agent.telemetry.*` rates in Datadog. Requests by status, payload sizes, logs per payload, encodings, agent version. |
+| What did the agent send? | Tag-key cardinality and tag bytes per log (the number the tag-filter feature moves), service/source/host/status breakdown. |
+
+Definitions and caveats: [docs/measurements.md](docs/measurements.md).
+
+## The pieces
+
+### `aoc generate` — the workload
 
 ```bash
-docker run --rm -v "$(pwd)/logs:/var/log/agent-of-chaos" \
-  -e AOCH_BENCHMARK_CONFIG=/app/benchmark_profiles.json \
-  -e AOCH_BENCHMARK=profile-high-throughput \
-  agent-of-chaos
+aoc generate --streams 8 --rate 5000 --log-dir ./logs                   # 8 files, 5k lines/s total
+aoc generate --format json --rate 20000 --intake http://localhost:8282  # JSON, push stats to the intake
+aoc generate --output stdout --rate 500                                 # one interleaved stream for docker log drivers
+aoc generate --mode scenario --scenario incident --scenario-speed 5     # scripted multi-phase run
+aoc generate --rotate-mode truncate --rotate-bytes 1MiB                 # copytruncate-style rotation
+aoc generate --deterministic --seed 42 --max-lines 1000000 --rate 0     # byte-identical, flat out
 ```
 
-## Configuration
+* **Rate-based**: `--rate` is aggregate lines/s across all streams (0 = as
+  fast as the disk allows). Pacing counts every record including the extra
+  stack-trace and oversized ones. Bursts (`--burst-size/--burst-interval`)
+  ride on top.
+* **Realistic content**: weighted DEBUG…CRITICAL messages, Python / Java /
+  Go stack traces (`--multiline-rate`), oversized lines (`--wide-line-rate`,
+  `--wide-line-bytes`), padding to a target line size (`--pad-to`).
+* **Formats**: `plain` (`<svc>.log`, multi-line traces), `json`
+  (`<svc>.json.log`, one object per line, trace in `error.stack`), `both`;
+  `--output stdout` for container log collection.
+* **Rotation** by rename (new inode) or truncate (copytruncate, same inode),
+  size and backup count configurable.
+* **Modes**: `steady`, `ramp`, `chaos` (streams crash/restart, sequence
+  resumes), `spike`, `pulse`, `scenario` (built-in `wave`, `business-day`,
+  `incident`, `longhaul`, or your YAML — `aoc scenarios show wave > my.yaml`).
+* **Deterministic**: `--deterministic --seed N` gives identical bytes for
+  identical config; `--max-lines` fixes the budget.
+* Fast: one process writes millions of lines per second flat out; paced
+  rates land within a fraction of a percent of target.
 
-Every CLI flag can be set via an environment variable with the `AOCH_` prefix. CLI arguments take precedence over environment variables.
+`aoc generate -h` lists every flag, grouped. Each flag is also an env var
+(`AOC_ROTATE_BYTES=4MiB`), which is how the compose files configure it.
 
-Boolean env vars accept `1`, `true`, `yes`, or `on` (case-insensitive).
+### `aoc intake` — the fake Datadog logs intake
 
-### Environment variable reference
+```bash
+aoc intake                                                # :8282 HTTP, :10516 legacy TCP; aoc.* → Datadog when DD_API_KEY is set
+aoc intake --agent-telemetry http://localhost:5000/telemetry --docker-container aoc-agent --name baseline
+aoc intake --api-key "$DD_API_KEY" --strict               # 403 on a wrong key, 400 on malformed payloads
+aoc intake --dd-metrics=false                             # keep everything local
+```
 
-| Environment variable | CLI flag | Default |
-|---------------------|----------|---------|
-| `AOCH_MODE` | `--mode` | `steady` |
-| `AOCH_SERVICES` | `--services` | `5` |
-| `AOCH_LINES_PER_CYCLE` | `--lines-per-cycle` | `20` |
-| `AOCH_CYCLE_SLEEP_MS` | `--cycle-sleep-ms` | `0` |
-| `AOCH_BURST_INTERVAL` | `--burst-interval` | `5.0` |
-| `AOCH_BURST_SIZE` | `--burst-size` | `1000` |
-| `AOCH_MAX_BYTES` | `--max-bytes` | `524288` |
-| `AOCH_BACKUP_COUNT` | `--backup-count` | `5` |
-| `AOCH_RAMP_START` | `--ramp-start` | `1` |
-| `AOCH_RAMP_STEP` | `--ramp-step` | `1` |
-| `AOCH_RAMP_INTERVAL` | `--ramp-interval` | `30` |
-| `AOCH_CHAOS_CRASH_RATE` | `--chaos-crash-rate` | `2.0` |
-| `AOCH_CHAOS_RESTART_DELAY` | `--chaos-restart-delay` | `5` |
-| `AOCH_SPIKE_INTERVAL` | `--spike-interval` | `30` |
-| `AOCH_SPIKE_DURATION` | `--spike-duration` | `10` |
-| `AOCH_SPIKE_SERVICES` | `--spike-services` | `5` |
-| `AOCH_PULSE_RAMP` | `--pulse-ramp` | `600` |
-| `AOCH_PULSE_PEAK` | `--pulse-peak` | `180` |
-| `AOCH_PULSE_COOLDOWN` | `--pulse-cooldown` | `0` |
-| `AOCH_PULSE_REST` | `--pulse-rest` | `2100` |
-| `AOCH_PULSE_BASE_SERVICES` | `--pulse-base-services` | `2` |
-| `AOCH_PULSE_PEAK_SERVICES` | `--pulse-peak-services` | `10` |
-| `AOCH_PULSE_BASE_LINES` | `--pulse-base-lines` | `4` |
-| `AOCH_PULSE_PEAK_LINES` | `--pulse-peak-lines` | `40` |
-| `AOCH_PULSE_PEAK_BURST_SIZE` | `--pulse-peak-burst-size` | `2000` |
-| `AOCH_PULSE_PEAK_BURST_INTERVAL` | `--pulse-peak-burst-interval` | `4.0` |
-| `AOCH_PULSE_CYCLES` | `--pulse-cycles` | `0` (forever) |
-| `AOCH_SCENARIO` | `--scenario` | — |
-| `AOCH_SCENARIO_FILE` | `--scenario-file` | — |
-| `AOCH_SCENARIO_SPEED` | `--scenario-speed` | `1.0` |
-| `AOCH_MULTILINE_RATE` | `--multiline-rate` | `0.20` |
-| `AOCH_WIDE_LINES` | `--wide-lines` | `false` |
-| `AOCH_WIDE_LINE_RATE` | `--wide-line-rate` | `0.03` |
-| `AOCH_DETERMINISTIC` | `--deterministic` | `false` |
-| `AOCH_GLOBAL_SEED` | `--global-seed` | `0` |
-| `AOCH_BENCHMARK_CONFIG` | `--benchmark-config` | — |
-| `AOCH_BENCHMARK` | `--benchmark` | — |
-| `AOCH_RUN_ALL_BENCHMARKS` | `--run-all-benchmarks` | `false` |
-| `AOCH_BENCHMARK_LIST` | `--benchmark-list` | `false` |
-| `AOCH_BENCHMARK_EMIT_CHUNK` | `--benchmark-emit-chunk` | `32` |
-| `AOCH_BENCHMARK_PLAIN_ONLY` | `--benchmark-plain-only` | `false` |
-| `AOCH_LOG_DIR` | `--log-dir` | repo dir (local) / `/var/log/agent-of-chaos` (image) |
-| `AOCH_STATS_INTERVAL` | `--stats-interval` | `5` |
+Accepts what the agent sends: `POST /api/v2/logs` (and `/v1/input`), gzip /
+zstd / deflate / identity, the empty `{}` connectivity probe, and the legacy
+TCP framing. Answers `202 {}` like the real intake, `413` above 5 MiB
+decompressed, and swallows `/api/v1/validate`, `/api/v2/series`, `/intake/`
+etc. with a 202 so an agent can be pointed at it entirely
+([docker-compose.offline.yml](docker-compose.offline.yml)).
 
-Copy `.env.example` to `.env` for docker compose overrides.
-
-## Docker details
-
-- **Image**: `python:3.12-slim`, no extra dependencies
-- **User**: runs as non-root `appuser` (uid 10001)
-- **Log volume**: `/var/log/agent-of-chaos` — mount this when running the container
-- **Entrypoint**: `python3 /app/agent_of_chaos.py` — additional args are forwarded as CLI flags
-
-### Datadog Agent sidecar example
-
-Mount the same host directory in both containers so the Agent tails logs the generator writes:
+Point an agent at it:
 
 ```yaml
-# docker-compose.override.yml (example)
-services:
-  agent-of-chaos:
-    volumes:
-      - ./logs:/var/log/agent-of-chaos
-
-  datadog-agent:
-    image: gcr.io/datadoghq/agent:latest
-    volumes:
-      - ./logs:/var/log/agent-of-chaos:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      DD_API_KEY: ${DD_API_KEY}
-      DD_LOGS_ENABLED: "true"
-      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
+DD_LOGS_CONFIG_LOGS_DD_URL: http://<intake-host>:8282
+DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+DD_LOGS_CONFIG_USE_HTTP: "true"
+DD_TELEMETRY_ENABLED: "true"              # lets the intake scrape /telemetry (localhost-only → shared netns)
+DD_TAGS: "run:<name>"                     # so the agent's own metrics line up with aoc.* in notebooks
 ```
 
-Configure a file log collection rule for `/var/log/agent-of-chaos/*.log` in the Agent.
+HTTP API:
 
-## Output
+| endpoint | purpose |
+|---|---|
+| `GET /harness/report?gaps=1` | full JSON report (with missing-seq ranges) |
+| `GET /harness/status` | liveness: generators, recent receive rate, missing, faults, Datadog submission health |
+| `GET /harness/timeseries?since=<unix>&format=csv` | per-second history |
+| `GET /harness/faults` · `POST` · `DELETE` | read / set / clear fault injection |
+| `POST /harness/reset?name=<run>` | zero everything, open a new measurement window (posts an event) |
+| `POST /harness/mark?text=…` | free-text annotation event (`aoc run` marks window close, generator stop, drain) |
+| `GET /metrics` | Prometheus text, if you'd rather scrape than push |
+| `POST /harness/gen/report` | generators push their counters here |
 
-Each service worker writes:
+### Faults
 
-- `{service}.log` — plain text
-- `{service}.json.log` — JSON (unless `AOCH_BENCHMARK_PLAIN_ONLY=true`)
+Set with `POST /harness/faults` (JSON), `--fault-*` for the initial state, or
+a profile timeline. All fields are independent.
 
-Files rotate at `AOCH_MAX_BYTES` with `AOCH_BACKUP_COUNT` backups retained.
+| field | effect | agent behaviour |
+|---|---|---|
+| `error_rate`, `error_status` | answer that status instead of 202 (payload not ingested) | 429 / 5xx → retry with backoff; other 4xx → the batch is dropped |
+| `drop_rate` | read the request, then close the connection with no response | retries (the payload was never counted, so retries count once) |
+| `outage` | drop everything | pipeline backs up, retries until it clears |
+| `latency_ms` (+ `jitter_ms`) | delay every response | senders stall, in-flight grows, `sender_latency` climbs |
+| `read_bps` | throttle how fast bodies are read | models a saturated uplink |
+
+Every change is an event in Datadog and a line in the report.
+
+### `aoc ship` — a reference shipper
+
+Tails a directory and POSTs batches the way the agent does (JSON arrays,
+gzip/zstd, agent headers, retry on 429/5xx). Validate the harness without an
+agent, or use it as the naive baseline the agent should beat:
+
+```bash
+aoc intake --dd-metrics=false &
+aoc ship --log-dir ./logs --intake http://localhost:8282 --from-start &
+aoc generate --streams 6 --rate 8000 --duration 30s --log-dir ./logs --intake http://localhost:8282
+aoc report --intake http://localhost:8282 --stdout
+```
+
+## Profiles
+
+A profile is one reproducible experiment: workload per generator, agent
+image/env, fault timeline, warm-up/window/drain
+([profiles/README.md](profiles/README.md)). Shipped: `baseline`,
+`high-throughput` (24 streams, 100k lines/s), `high-compression`,
+`rotation-churn` (128 KiB files, copytruncate vs rename), `multiline-heavy`,
+`intake-outage` (503 storm then 429s), `flaky-network` (dropped connections,
+latency, slow uplink), `chaos-restarts`, `incident-scenario`,
+`deterministic-bytes` (byte-identical input for A/B).
+
+## The tag-filter fleet
+
+[docker-compose.tag-filter.yml](docker-compose.tag-filter.yml) is the
+15-generator topology (8 plain-text, 7 JSON) behind
+`datadog/agent-dev:log-tag-filtering`, with logs going to the fake intake.
+The base file is the **baseline**; stacking
+[docker-compose.tag-filter.filters.yml](docker-compose.tag-filter.filters.yml)
+adds `DD_LOGS_CONFIG_TAG_FILTERS` for the **comparison**. `AOC_VARIANT` is the
+`run:` tag on the agent's metrics and the intake's `aoc.*` metrics.
+
+```bash
+cp .env.example .env          # DD_API_KEY, AOC_VARIANT=baseline|comparison
+docker compose -f docker-compose.tag-filter.yml up --build -d
+docker compose -f docker-compose.tag-filter.yml -f docker-compose.tag-filter.filters.yml up --build -d
+aoc report --intake http://localhost:8282 --out results/$AOC_VARIANT       # ssh -L 8282:localhost:8282 on EC2
+aoc notebook --results results/baseline --results results/comparison    # tag bytes per log, wire B/s, CPU …
+```
+
+`scripts/spotty-intake.sh` (iptables packet loss) still works against the
+real intake; against the fake one, use the `drop_rate` / `read_bps` faults.
+
+## Building
+
+```bash
+make build            # ./bin/aoc (Go 1.25+)
+make test
+make image            # docker image used by the compose files
+go install github.com/UTXOnly/agent_of_chaos/cmd/aoc@latest
+```
+
+Dependencies: `klauspost/compress` (gzip/zstd) and `yaml.v3`.
+
+## Things worth knowing
+
+* **Custom metrics**: a run submits ~100 `aoc.*` series (plus one
+  `aoc.stream.*` pair per stream with problems), each tagged with the run
+  name, so every run creates a new set of custom-metric timeseries. Reuse
+  names when you don't need a new record.
+* **Links to your org**: set `DD_SUBDOMAIN=<yours>` (or `DD_APP_URL`) in
+  `.env` so notebook links open your subdomain rather than
+  `app.datadoghq.com`.
+* **Profiling cadence**: the agent's internal profiler defaults to one
+  profile every 5 minutes; the compose sets `DD_INTERNAL_PROFILING_PERIOD`
+  and `DD_INTERNAL_PROFILING_CPU_DURATION` to 60 s (30 s works for very short
+  runs). Profiles upload through the trace-agent, so `DD_APM_ENABLED` must
+  stay on; the last partial period of a run is not uploaded.
+* **Rebuilding the image while the stack runs**: the agent shares the
+  intake's network namespace. If you recreate the intake by hand, recreate
+  the agent too (`docker compose up -d --force-recreate datadog-agent`).
+  `aoc run` and `docker compose up -d --build` do the right thing.
+* **Container logs**: `DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true` by default,
+  so other containers on the machine show up as "unmarked" logs. Set it to
+  `false` for a quieter measurement.
+* **The ~10 s latency spikes** in most runs are the agent's
+  `file_scan_period`: after a rotation the new file is discovered on the
+  next scan. Bigger `--rotate-bytes`, or a shorter scan period, flattens them.
+* **"Missing" while generators run** includes logs still in flight; after the
+  generators stop and the pipeline drains it becomes "lost". After injected
+  faults the agent may still be in retry backoff when the drain ends — the
+  report says so; use a longer `drain`.
+* **Deterministic runs** stamp synthetic timestamps, so e2e latency is n/a
+  there; everything else is measured.
+
+## Migrating from the Python version
+
+The Go generator replaces `agent_of_chaos.py`; `benchmark_profiles.json`
+became `profiles/*.yaml` for `aoc run`.
+
+| before | now |
+|---|---|
+| `--services N` | `--streams N` |
+| `--lines-per-cycle` / `--cycle-sleep-ms` | `--rate` (aggregate lines/s, 0 = flat out) |
+| `--max-bytes` / `--backup-count` | `--rotate-bytes` / `--rotate-keep` (+ `--rotate-mode`) |
+| `--benchmark-plain-only` | `--format plain` (default; `json` / `both`) |
+| `--global-seed` / `--deterministic` | `--seed` / `--deterministic` |
+| `--benchmark …` / `duration_sec × total_lines_per_sec` | `--max-lines`, `--duration`, or an `aoc run` profile |
+| `AOCH_*` env vars | `AOC_*` (every flag) |

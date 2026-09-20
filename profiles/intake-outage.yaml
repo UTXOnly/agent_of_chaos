@@ -1,0 +1,17 @@
+name: intake-outage
+description: Steady load, then the intake answers 503 to everything for 45 s, then a 30 s window of 20% 429s. Measures buffering, retry/backoff, recovery time and whether anything is lost or duplicated on the way back.
+duration: 4m
+warmup: 20s
+drain: 90s
+generators:
+  gen-plain: { streams: 8, rate: 5000 }
+  gen-json:  { streams: 8, rate: 5000 }
+faults:
+  - at: 45s
+    set: { error_rate: 1.0, error_status: 503, note: "full intake outage" }
+  - at: 90s
+    clear: true
+  - at: 150s
+    set: { error_rate: 0.2, error_status: 429, note: "throttling" }
+  - at: 180s
+    clear: true

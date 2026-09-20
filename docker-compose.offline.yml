@@ -1,0 +1,16 @@
+# Overlay: run without a Datadog account. The agent's metrics/metadata go to
+# the intake's 202 sink and the intake does not submit anything.
+#
+#   DD_API_KEY=offline docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d --build
+#
+# You still get report.md / report.json / timeseries.csv from `aoc report`,
+# just no aoc.* metrics or notebooks in Datadog.
+services:
+  intake:
+    environment:
+      AOC_DD_METRICS: "false"
+  datadog-agent:
+    environment:
+      DD_DD_URL: http://localhost:8282
+      DD_INTERNAL_PROFILING_ENABLED: "false"
+      DD_APM_ENABLED: "false"

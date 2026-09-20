@@ -1,0 +1,202 @@
+# Tag-filter fleet: 15 log generators (8 plain-text, 7 JSON) tailed by a single
+# Datadog Agent (by default the datadog/agent-dev:log-tag-filtering build), with
+# logs going to the aoc fake intake instead of Datadog. The agent's own metrics
+# and profiles go to Datadog as usual and the intake submits aoc.* metrics
+# (delivery, tag bytes per log, wire bytes, latency, agent CPU/memory), all
+# tagged run:<AOC_VARIANT>, so baseline and comparison are one notebook apart.
+#
+# This file alone is the BASELINE (no DD_LOGS_CONFIG_TAG_FILTERS). Stack the
+# overlay for the COMPARISON with tag filters applied:
+#
+#   cp .env.example .env   # set DD_API_KEY, AOC_VARIANT (and DD_SITE if needed)
+#   docker compose -f docker-compose.tag-filter.yml up --build -d                                       # baseline
+#   docker compose -f docker-compose.tag-filter.yml -f docker-compose.tag-filter.filters.yml up --build -d  # comparison
+#   aoc report --intake http://localhost:8282 --out results/$AOC_VARIANT   # (ssh -L 8282:localhost:8282 on EC2)
+#   aoc notebook --results results/baseline --results results/comparison
+#   docker compose -f docker-compose.tag-filter.yml down -v
+#
+# Every generator writes to its own subdir of the shared log volume; the agent
+# tails those files (datadog/conf.d/agent_of_chaos.d/conf.yaml), adding
+# filename:/dirname: tags, and collects container stdout too
+# (container_collect_all), adding container_*/docker_image/short_image tags.
+
+name: aoc-tag-filter
+
+x-generator: &generator
+  image: agent-of-chaos:latest
+  restart: unless-stopped
+  stop_grace_period: 20s
+  volumes:
+    - aoc-logs:/var/log/agent-of-chaos
+  depends_on:
+    intake:
+      condition: service_healthy
+
+x-generator-env: &generator-env
+  AOC_INTAKE: http://intake:8282
+  AOC_MODE: ${AOC_FLEET_MODE:-steady}
+  AOC_STREAMS: ${AOC_FLEET_STREAMS:-4}
+  AOC_RATE: ${AOC_FLEET_RATE:-300}
+  AOC_ROTATE_BYTES: ${AOC_FLEET_ROTATE_BYTES:-512KiB}
+  AOC_ROTATE_KEEP: ${AOC_FLEET_ROTATE_KEEP:-3}
+  AOC_MULTILINE_RATE: ${AOC_FLEET_MULTILINE_RATE:-0.05}
+  AOC_BURST_SIZE: ${AOC_FLEET_BURST_SIZE:-0}
+
+x-plain-env: &plain-env
+  <<: *generator-env
+  AOC_FORMAT: plain
+
+x-json-env: &json-env
+  <<: *generator-env
+  AOC_FORMAT: json
+
+services:
+  intake:
+    image: agent-of-chaos:latest
+    build: .
+    container_name: aoc-intake
+    user: "0:0"   # docker.sock, for the agent's container CPU/memory
+    command:
+      - intake
+      - --name=${AOC_VARIANT:-local}
+      - --agent-telemetry=http://localhost:5000/telemetry
+      - --docker-container=dd-agent-tag-filter
+      - --agent-image=${DD_AGENT_IMAGE:-datadog/agent-dev:log-tag-filtering-9e35a50b-full}
+      - --dd-tags=experiment:log-tag-filter,variant:${AOC_VARIANT:-local}
+    environment:
+      DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+    ports:
+      - "${AOC_INTAKE_PORT:-8282}:8282"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8282/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  datadog-agent:
+    image: ${DD_AGENT_IMAGE:-datadog/agent-dev:log-tag-filtering-9e35a50b-full}
+    container_name: dd-agent-tag-filter
+    restart: unless-stopped
+    # Shares the intake's network namespace (logs → localhost:8282, telemetry
+    # scraped from localhost:5000). Recreate the agent if you recreate the intake.
+    network_mode: "service:intake"
+    pid: host
+    depends_on:
+      intake:
+        condition: service_healthy
+    environment:
+      DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      DD_HOSTNAME: ${DD_HOSTNAME:-aoc-tag-filter-lab}
+      DD_ENV: tagfilter-lab
+      # Host-level tags that the filter is expected to strip from every log.
+      DD_TAGS: >-
+        experiment:log-tag-filter
+        variant:${AOC_VARIANT:-local}
+        run:${AOC_VARIANT:-local}
+        project:agent-of-chaos
+        region:local
+        availability-zone:local-a
+        cloud_provider:none
+        instance-type:laptop
+        kernel:docker-desktop
+        vcpu:8
+        version:fleet-1
+      DD_LOGS_ENABLED: "true"
+      DD_LOGS_CONFIG_LOGS_DD_URL: http://localhost:8282
+      DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+      DD_LOGS_CONFIG_USE_HTTP: "true"
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "true"
+      DD_CONTAINER_EXCLUDE_LOGS: "name:dd-agent-tag-filter name:aoc-intake"
+      DD_LOGS_CONFIG_OPEN_FILES_LIMIT: "500"
+      DD_TELEMETRY_ENABLED: "true"
+      DD_LOG_LEVEL: ${DD_LOG_LEVEL:-info}
+      DD_INTERNAL_PROFILING_ENABLED: "true"
+      DD_INTERNAL_PROFILING_PERIOD: ${DD_INTERNAL_PROFILING_PERIOD:-60s}
+      DD_INTERNAL_PROFILING_CPU_DURATION: ${DD_INTERNAL_PROFILING_CPU_DURATION:-60s}
+      DD_INTERNAL_PROFILING_EXTRA_TAGS: "experiment:log-tag-filter variant:${AOC_VARIANT:-local} run:${AOC_VARIANT:-local}"
+    volumes:
+      - aoc-logs:/var/log/agent-of-chaos:ro
+      - ./datadog/conf.d/agent_of_chaos.d:/etc/datadog-agent/conf.d/agent_of_chaos.d:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      # The json-file driver keeps the actual log files here. Without this mount the
+      # agent streams container logs through the docker socket instead of tailing files.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Tailing offsets, so an agent restart neither re-sends nor skips lines.
+      - aoc-agent-run:/opt/datadog-agent/run
+      # Process collection resolves uids to usernames through the host's passwd file.
+      - /etc/passwd:/etc/passwd:ro
+
+  # ── plain-text generators (8) ───────────────────────────────────────────────
+  plain-01:
+    <<: *generator
+    container_name: aoc-plain-01
+    environment: { <<: *plain-env, AOC_NAME: plain-01, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-01 }
+  plain-02:
+    <<: *generator
+    container_name: aoc-plain-02
+    environment: { <<: *plain-env, AOC_NAME: plain-02, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-02 }
+  plain-03:
+    <<: *generator
+    container_name: aoc-plain-03
+    environment: { <<: *plain-env, AOC_NAME: plain-03, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-03 }
+  plain-04:
+    <<: *generator
+    container_name: aoc-plain-04
+    environment: { <<: *plain-env, AOC_NAME: plain-04, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-04 }
+  plain-05:
+    <<: *generator
+    container_name: aoc-plain-05
+    environment: { <<: *plain-env, AOC_NAME: plain-05, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-05 }
+  plain-06:
+    <<: *generator
+    container_name: aoc-plain-06
+    environment: { <<: *plain-env, AOC_NAME: plain-06, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-06 }
+  plain-07:
+    <<: *generator
+    container_name: aoc-plain-07
+    environment: { <<: *plain-env, AOC_NAME: plain-07, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-07 }
+  plain-08:
+    <<: *generator
+    container_name: aoc-plain-08
+    environment: { <<: *plain-env, AOC_NAME: plain-08, AOC_LOG_DIR: /var/log/agent-of-chaos/plain-08 }
+
+  # ── JSON generators (7) ─────────────────────────────────────────────────────
+  json-01:
+    <<: *generator
+    container_name: aoc-json-01
+    environment: { <<: *json-env, AOC_NAME: json-01, AOC_LOG_DIR: /var/log/agent-of-chaos/json-01 }
+  json-02:
+    <<: *generator
+    container_name: aoc-json-02
+    environment: { <<: *json-env, AOC_NAME: json-02, AOC_LOG_DIR: /var/log/agent-of-chaos/json-02 }
+  json-03:
+    <<: *generator
+    container_name: aoc-json-03
+    environment: { <<: *json-env, AOC_NAME: json-03, AOC_LOG_DIR: /var/log/agent-of-chaos/json-03 }
+  json-04:
+    <<: *generator
+    container_name: aoc-json-04
+    environment: { <<: *json-env, AOC_NAME: json-04, AOC_LOG_DIR: /var/log/agent-of-chaos/json-04 }
+  json-05:
+    <<: *generator
+    container_name: aoc-json-05
+    environment: { <<: *json-env, AOC_NAME: json-05, AOC_LOG_DIR: /var/log/agent-of-chaos/json-05 }
+  json-06:
+    <<: *generator
+    container_name: aoc-json-06
+    environment: { <<: *json-env, AOC_NAME: json-06, AOC_LOG_DIR: /var/log/agent-of-chaos/json-06 }
+  json-07:
+    <<: *generator
+    container_name: aoc-json-07
+    environment: { <<: *json-env, AOC_NAME: json-07, AOC_LOG_DIR: /var/log/agent-of-chaos/json-07 }
+
+volumes:
+  aoc-logs:
+  aoc-agent-run:

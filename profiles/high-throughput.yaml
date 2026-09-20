@@ -1,0 +1,8 @@
+name: high-throughput
+description: Push the file tailer — 24 plain-text streams at 100k lines/s, 4 MiB rotation, 6% oversized lines. Watch delivery ratio, agent CPU and e2e latency; raise rate until something gives.
+duration: 3m
+warmup: 20s
+drain: 60s
+generators:
+  gen-plain: { streams: 24, rate: 100000, rotate-bytes: 4MiB, rotate-keep: 3, multiline-rate: 0.08, wide-line-rate: 0.06, wide-line-bytes: 4096 }
+  gen-json:  { enabled: false }

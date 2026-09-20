@@ -1,0 +1,13 @@
+name: flaky-network
+description: 10% of requests get no response at all and every response is delayed 300±200 ms, on top of a 500 kB/s uplink. The nastiest case for exactly-once delivery — watch duplicates.
+duration: 4m
+warmup: 20s
+drain: 90s
+generators:
+  gen-plain: { streams: 8, rate: 5000 }
+  gen-json:  { streams: 8, rate: 5000 }
+faults:
+  - at: 30s
+    set: { drop_rate: 0.1, latency_ms: 300, jitter_ms: 200, read_bps: 500000, note: "flaky uplink" }
+  - at: 180s
+    clear: true

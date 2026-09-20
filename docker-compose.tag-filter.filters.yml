@@ -1,0 +1,16 @@
+# Overlay: enable log tag filtering on the agent. Stack on top of the base file:
+#   docker compose -f docker-compose.tag-filter.yml -f docker-compose.tag-filter.filters.yml up -d
+services:
+  datadog-agent:
+    environment:
+      DD_LOGS_CONFIG_TAG_FILTERS: >-
+        {"exclude":[
+          "env:*","availability-zone:*","aws_account:*","cloud_provider:*",
+          "container_id:*","container_name:*","datadog.api_key_uuid:*",
+          "datadog.index:*","datadog.submission_auth:*","dirname:*",
+          "docker_image:*","filename:*","git.commit.sha:*",
+          "git.repository_url:*","iam_profile:*","image_id:*","image_name:*",
+          "image:*","instance-type:*","kernel:*","name:*","project:*",
+          "region:*","security-group:*","service:*","short_image:*",
+          "source:*","vcpu:*","version:*"
+        ]}
