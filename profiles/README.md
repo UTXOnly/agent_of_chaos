@@ -37,6 +37,7 @@ aoc run --profile profiles/baseline.yaml --agent-image datadog/agent-dev:my-buil
 aoc compare results/baseline results/candidate
 ```
 
-Or point `aoc.yaml` at it (`profile: profiles/baseline.yaml`) and let `aoc ab`
-run it against two agent images back to back; the profile can also be
-written inline in `aoc.yaml`.
+Or A/B two agent images on it — `aoc ab --workload baseline` takes the name
+of a profile here, or a path to one elsewhere. Without `--workload`, `aoc ab`
+runs the one `aoc.yaml` points at (`profile:`), which can also be written
+inline there.
