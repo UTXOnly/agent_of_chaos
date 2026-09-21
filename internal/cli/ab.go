@@ -28,32 +28,35 @@ import (
 )
 
 func init() {
-	register(command{name: "ab", short: "A/B test two agent images on the same workload, driven by aoc.yaml", run: runAB})
+	register(command{name: "ab", short: "A/B test a build against the release on one workload (--b IMAGE)", run: runAB})
 }
 
-// ABConfig is aoc.yaml: two agents, one workload, where the results go. The
-// shipped aoc.yaml documents every field.
+// ABConfig is aoc.yaml: the settings a test runs with — the control image,
+// the shared agent env, the thresholds, the default workload. What a given
+// test is about (the image under test, its feature flag, the workload, the
+// focus) comes from the aoc ab flags. The config as it ran is written next
+// to the results, so --config repeats the test.
 type ABConfig struct {
-	Name       string             `yaml:"name"`
+	Name       string             `yaml:"name,omitempty"`
 	Profile    ProfileRef         `yaml:"profile"`
-	Duration   gen.Duration       `yaml:"duration"`
-	Warmup     gen.Duration       `yaml:"warmup"`
-	Drain      gen.Duration       `yaml:"drain"`
+	Duration   gen.Duration       `yaml:"duration,omitempty"`
+	Warmup     gen.Duration       `yaml:"warmup,omitempty"`
+	Drain      gen.Duration       `yaml:"drain,omitempty"`
 	Runs       int                `yaml:"runs"`
-	Pause      gen.Duration       `yaml:"pause"`
-	Parallel   *bool              `yaml:"parallel"` // both sides at once (default), or one after the other
+	Pause      gen.Duration       `yaml:"pause,omitempty"`
+	Parallel   *bool              `yaml:"parallel,omitempty"` // both sides at once (default), or one after the other
 	A          Variant            `yaml:"a"`
 	B          Variant            `yaml:"b"`
-	Env        map[string]string  `yaml:"env"`
+	Env        map[string]string  `yaml:"env,omitempty"`
 	Results    string             `yaml:"results"`
-	Notebook   *bool              `yaml:"notebook"`
-	Compose    []string           `yaml:"compose"`
-	Threshold  float64            `yaml:"threshold"`  // percent; a headline change below it is noise
-	Source     string             `yaml:"source"`     // a checkout of the agent's repository, for the code section
-	Focus      string             `yaml:"focus"`      // the question this test answers; usually from --focus
-	Code       []string           `yaml:"code"`       // packages under test, e.g. pkg/logs/sender
-	Watch      []string           `yaml:"watch"`      // extra compare.md metrics promoted to the headline
-	Thresholds map[string]float64 `yaml:"thresholds"` // percent per signal: throughput, saturation, cpu, memory
+	Notebook   *bool              `yaml:"notebook,omitempty"`
+	Compose    []string           `yaml:"compose,omitempty"`
+	Threshold  float64            `yaml:"threshold"`            // percent; a headline change below it is noise
+	Source     string             `yaml:"source,omitempty"`     // a checkout of the agent's repository, for the code section
+	Focus      string             `yaml:"focus,omitempty"`      // the question this test answers; usually from --focus
+	Code       []string           `yaml:"code,omitempty"`       // packages under test, e.g. pkg/logs/sender
+	Watch      []string           `yaml:"watch,omitempty"`      // extra compare.md metrics promoted to the headline
+	Thresholds map[string]float64 `yaml:"thresholds,omitempty"` // percent per signal: throughput, saturation, cpu, memory
 }
 
 // Variant is one side of the test: an image and what applies to it only.
@@ -61,7 +64,7 @@ type Variant struct {
 	Name  string            `yaml:"name"`
 	Image string            `yaml:"image"`
 	Pull  string            `yaml:"pull"`
-	Env   map[string]string `yaml:"env"`
+	Env   map[string]string `yaml:"env,omitempty"`
 }
 
 // ProfileRef is `profile:` — the path of a profile file, or the profile
@@ -88,6 +91,13 @@ func (p *ProfileRef) UnmarshalYAML(n *yaml.Node) error {
 	return errors.New("profile: expected a path or a mapping")
 }
 
+func (p ProfileRef) MarshalYAML() (any, error) {
+	if p.Inline != nil {
+		return p.Inline, nil
+	}
+	return p.Path, nil
+}
+
 func (p ProfileRef) String() string {
 	if p.Inline != nil {
 		return "inline"
@@ -99,16 +109,18 @@ const defaultAImage = "datadog/agent:7"
 
 // loadABConfig reads and validates an aoc.yaml. Unknown keys are errors:
 // a typo in a config is easier to spot now than after a 10-minute run.
-func loadABConfig(path string) (*ABConfig, []byte, error) {
+// The image under test and the workload can come from the flags instead,
+// so validate checks for those once the flags are in.
+func loadABConfig(path string) (*ABConfig, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var c ABConfig
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
-		return nil, nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if c.Runs <= 0 {
 		c.Runs = 1
@@ -136,20 +148,184 @@ func loadABConfig(path string) (*ABConfig, []byte, error) {
 			v.Pull = "always"
 		}
 	}
-	switch {
-	case c.Profile.Path == "" && c.Profile.Inline == nil:
-		return nil, nil, fmt.Errorf("%s: profile is required (a path such as profiles/baseline.yaml, or the profile inline)", path)
-	case c.B.Image == "":
-		return nil, nil, fmt.Errorf("%s: b.image is required (the development image to test)", path)
-	case sanitize(c.A.Name) == sanitize(c.B.Name):
-		return nil, nil, fmt.Errorf("%s: a.name and b.name must differ", path)
+	if sanitize(c.A.Name) == sanitize(c.B.Name) {
+		return nil, fmt.Errorf("%s: a.name and b.name must differ", path)
 	}
 	for _, v := range []Variant{c.A, c.B} {
 		if err := checkPull(v.Pull); err != nil {
-			return nil, nil, fmt.Errorf("%s: %s.pull: %v", path, v.Name, err)
+			return nil, fmt.Errorf("%s: %s.pull: %v", path, v.Name, err)
 		}
 	}
-	return &c, b, nil
+	if err := checkThresholds(c.Thresholds); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+	return &c, nil
+}
+
+// thresholdSignals are the signals `thresholds` can give a percent to;
+// `threshold` covers the ones it leaves out.
+var thresholdSignals = []string{"throughput", "saturation", "cpu", "memory"}
+
+func checkThresholds(t map[string]float64) error {
+	keys := make([]string, 0, len(t))
+	for k := range t {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // so a config with two bad keys always reports the same one
+	for _, k := range keys {
+		known := false
+		for _, s := range thresholdSignals {
+			known = known || k == s
+		}
+		if !known {
+			return fmt.Errorf("thresholds: %q is not a signal (%s)", k, strings.Join(thresholdSignals, ", "))
+		}
+	}
+	return nil
+}
+
+// thresholdSummary is the percent per signal, `threshold` filling in the
+// signals `thresholds` does not name.
+func (c *ABConfig) thresholdSummary() string {
+	parts := make([]string, 0, len(thresholdSignals))
+	for _, s := range thresholdSignals {
+		v, ok := c.Thresholds[s]
+		if !ok {
+			v = c.Threshold
+		}
+		parts = append(parts, fmt.Sprintf("%s %s%%", s, strconv.FormatFloat(v, 'g', -1, 64)))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// validate reports what neither the config nor the flags supplied.
+func (c *ABConfig) validate(path string) error {
+	switch {
+	case c.B.Image == "":
+		return fmt.Errorf("no image to test: pass --b IMAGE, or set b.image in %s", path)
+	case c.Profile.Path == "" && c.Profile.Inline == nil:
+		return fmt.Errorf("no workload: pass --workload NAME, or set profile in %s", path)
+	}
+	return nil
+}
+
+// workloadRef resolves --workload: a name is a profile in profiles/, a
+// path is taken as it is.
+func workloadRef(v string) ProfileRef {
+	if strings.Contains(v, "/") || strings.HasSuffix(v, ".yaml") || strings.HasSuffix(v, ".yml") {
+		return ProfileRef{Path: v}
+	}
+	return ProfileRef{Path: filepath.Join("profiles", v+".yaml")}
+}
+
+// imageTag is an image reference's tag, or its last path element when it
+// carries none.
+func imageTag(image string) string {
+	if i := strings.LastIndex(image, ":"); i >= 0 && !strings.Contains(image[i+1:], "/") {
+		return image[i+1:]
+	}
+	if i := strings.LastIndex(image, "/"); i >= 0 {
+		return image[i+1:]
+	}
+	return image
+}
+
+// experimentName names a test that neither --name nor the config named:
+// the tag under test and the workload.
+func experimentName(bImage, workload string) string {
+	return sanitize(imageTag(bImage) + "-" + workload)
+}
+
+// packagingNote warns when one image is a -full or -jmx build and the
+// other is not: those run more processes, so container memory is not
+// comparable between the sides.
+func packagingNote(a, b Variant) string {
+	pa, pb := imagePackaging(a.Image), imagePackaging(b.Image)
+	if pa == pb {
+		return ""
+	}
+	packaged, plain, kind := a, b, pa
+	if pa == "" {
+		packaged, plain, kind = b, a, pb
+	}
+	return fmt.Sprintf("warning: %s is a %s image and %s is not; container memory is not comparable", packaged.Name, strings.TrimPrefix(kind, "-"), plain.Name)
+}
+
+func imagePackaging(image string) string {
+	tag := imageTag(image)
+	for _, s := range []string{"-full", "-jmx"} {
+		if strings.HasSuffix(tag, s) {
+			return s
+		}
+	}
+	return ""
+}
+
+// parseKV turns K=V flags into a map. The value keeps whatever follows
+// the first =, so a JSON feature flag survives.
+func parseKV(list []string) (map[string]string, error) {
+	if len(list) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(list))
+	for _, s := range list {
+		k, v, ok := strings.Cut(s, "=")
+		if k = strings.TrimSpace(k); !ok || k == "" {
+			return nil, fmt.Errorf("%q is not K=V", s)
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// mergeEnv lays add over base without touching either.
+func mergeEnv(base, add map[string]string) map[string]string {
+	if len(add) == 0 {
+		return base
+	}
+	out := make(map[string]string, len(base)+len(add))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range add {
+		out[k] = v
+	}
+	return out
+}
+
+// listFlag is a repeatable flag; with split, one value may also be a
+// comma-separated list.
+type listFlag struct {
+	vals  []string
+	split bool
+}
+
+func (l *listFlag) String() string {
+	if l == nil {
+		return ""
+	}
+	return strings.Join(l.vals, ",")
+}
+
+func (l *listFlag) Set(s string) error {
+	if !l.split {
+		l.vals = append(l.vals, s)
+		return nil
+	}
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			l.vals = append(l.vals, v)
+		}
+	}
+	return nil
+}
+
+// list registers a repeatable flag.
+func (fs *flagSet) list(name string, split bool, usage string) *listFlag {
+	l := &listFlag{split: split}
+	fs.Var(l, name, usage)
+	fs.track(name)
+	return l
 }
 
 // workload resolves the profile the two sides run, with the config's
@@ -224,6 +400,7 @@ func (c *ABConfig) plan(experiment string) []abRun {
 // abSummary is ab.json: the identities behind the comparison, for tooling.
 type abSummary struct {
 	Experiment string             `json:"experiment"`
+	Focus      string             `json:"focus,omitempty"`
 	Config     string             `json:"config"`
 	Profile    string             `json:"profile"`
 	Started    time.Time          `json:"started"`
@@ -263,25 +440,38 @@ type abHeadlineRow struct {
 
 func runAB(args []string) int {
 	fs := newFlagSet("ab",
-		"A/B test two Datadog Agent images on one workload, as described by an\n"+
-			"aoc.yaml: run the profile against side a (the latest public release by\n"+
-			"default), then against side b (a development build), optionally for\n"+
-			"several alternating rounds, and compare — a Markdown table, ab.json, a\n"+
-			"Datadog notebook with both agents overlaid on every chart, and every\n"+
-			"metric/event tagged experiment:<name> variant:<side>.",
-		"  aoc ab                          # ./aoc.yaml\n"+
-			"  aoc ab --config tests/tag-filter.yaml --runs 3\n"+
-			"  aoc ab --plan                   # validate the config and show what would run\n"+
-			"  aoc ab --only b                 # rebuilt the dev image? re-run b, reuse a's results")
-	config := fs.Str("config", "aoc.yaml", "the test to run (a copy is kept with the results)")
-	name := fs.Str("name", "", "experiment name (overrides the config's `name`)")
+		"A/B test two Datadog Agent images on one workload: the build under test\n"+
+			"(--b) against the control (the latest public release), on the workload\n"+
+			"--workload names, optionally for several alternating rounds. aoc.yaml\n"+
+			"holds the settings both tests share; the flags say what this one is\n"+
+			"about. Out come findings.md, compare.md, ab.json, a Datadog notebook\n"+
+			"with both agents overlaid, and metrics tagged experiment:<name>\n"+
+			"variant:<side>.",
+		"  aoc ab --b datadog/agent-dev:my-branch-py3 --workload baseline --focus \"is the new sender slower?\"\n"+
+			"  aoc ab --b datadog/agent-dev:my-branch-py3 --b-env DD_LOGS_CONFIG_TAG_FILTERS='{\"exclude\":[\"dirname:*\"]}'\n"+
+			"  aoc ab --b … --plan             # validate and show what would run\n"+
+			"  aoc ab --only b                 # rebuilt the dev image? re-run b, reuse a's results\n"+
+			"  aoc ab --config results/<name>/aoc.yaml --compare-only   # re-render a finished test")
+	fs.section("The test")
+	bImage := fs.Str("b", "", "the image under test (the config's `b.image` otherwise)")
+	aImage := fs.Str("a", "", "the control image (the config's `a.image` otherwise, else "+defaultAImage+")")
+	workload := fs.Str("workload", "", "the workload both sides run: a name in profiles/, or a path (the config's `profile` otherwise)")
+	focus := fs.Str("focus", "", "the question this test answers; it opens the brief and names the notebook")
+	code := fs.list("code", true, "a package under test, e.g. pkg/logs/sender; repeatable, commas allowed")
+	watch := fs.list("watch", true, "a compare.md metric to promote to the headline; repeatable, commas allowed")
+	bEnv := fs.list("b-env", false, "K=V only the image under test gets, e.g. the feature flag; repeatable")
+	env := fs.list("env", false, "K=V both sides get; repeatable")
+	config := fs.Str("config", "aoc.yaml", "the settings to run with (the effective config is kept with the results)")
+	name := fs.Str("name", "", "experiment name (default: the config's `name`, else <b image tag>-<workload>)")
+	fs.section("The run")
 	duration := fs.Duration("duration", 0, "override the measured window for both sides")
 	runs := fs.Int("runs", 0, "override `runs`: rounds per side")
 	sequential := fs.Bool("sequential", false, "run the sides one after the other instead of alongside each other (the config's `parallel: false`)")
-	threshold := fs.Float("threshold", 0, "override `threshold`: percent change on a headline metric that counts as a finding")
+	threshold := fs.Float("threshold", 0, "percent change that counts as a finding, for every signal (overrides `threshold` and `thresholds`)")
 	only := fs.Str("only", "", "run only this side (a, b, or a side's name); the other side's existing results are reused")
 	plan := fs.Bool("plan", false, "print the resolved plan and exit without running anything")
 	compareOnly := fs.Bool("compare-only", false, "skip the runs; rebuild compare.md, ab.json and the notebook from the results on disk")
+	fs.section("Plumbing")
 	composeFile := fs.Str("compose-file", "docker-compose.yml", "base compose file")
 	composeCmd := fs.Str("compose-cmd", "docker compose", "compose command")
 	intake := fs.Str("intake", "http://localhost:8282", "how this machine reaches the intake")
@@ -292,10 +482,37 @@ func runAB(args []string) int {
 	if !fs.parse(args) {
 		return 2
 	}
-	cfg, cfgSrc, err := loadABConfig(*config)
+	cfg, err := loadABConfig(*config)
 	if err != nil {
 		return fail("ab: %v", err)
 	}
+	if *aImage != "" {
+		cfg.A.Image = *aImage
+	}
+	if *bImage != "" {
+		cfg.B.Image = *bImage
+	}
+	if *workload != "" {
+		cfg.Profile = workloadRef(*workload)
+	}
+	if *focus != "" {
+		cfg.Focus = *focus
+	}
+	if len(code.vals) > 0 {
+		cfg.Code = code.vals
+	}
+	if len(watch.vals) > 0 {
+		cfg.Watch = watch.vals
+	}
+	shared, err := parseKV(env.vals)
+	if err != nil {
+		return fail("ab: --env %v", err)
+	}
+	candidate, err := parseKV(bEnv.vals)
+	if err != nil {
+		return fail("ab: --b-env %v", err)
+	}
+	cfg.Env, cfg.B.Env = mergeEnv(cfg.Env, shared), mergeEnv(cfg.B.Env, candidate)
 	if *runs > 0 {
 		cfg.Runs = *runs
 	}
@@ -304,6 +521,10 @@ func runAB(args []string) int {
 	}
 	if *threshold > 0 {
 		cfg.Threshold = *threshold
+		cfg.Thresholds = map[string]float64{}
+		for _, sig := range thresholdSignals {
+			cfg.Thresholds[sig] = *threshold
+		}
 	}
 	if cfg.Notebook != nil && !flagGiven(fs, "notebook") {
 		*mkNotebook = *cfg.Notebook
@@ -311,6 +532,10 @@ func runAB(args []string) int {
 	parallel := cfg.Parallel == nil || *cfg.Parallel
 	if *sequential {
 		parallel = false
+	}
+	cfg.Parallel = &parallel
+	if err := cfg.validate(*config); err != nil {
+		return fail("ab: %v", err)
 	}
 	p, profileSrc, err := cfg.workload()
 	if err != nil {
@@ -321,9 +546,10 @@ func runAB(args []string) int {
 		experiment = cfg.Name
 	}
 	if experiment == "" {
-		experiment = "ab-" + p.Name
+		experiment = experimentName(cfg.B.Image, p.Name)
 	}
 	experiment = sanitize(experiment)
+	cfg.Name = experiment
 	all := cfg.plan(experiment)
 	todo := all
 	if *compareOnly {
@@ -358,6 +584,19 @@ func runAB(args []string) int {
 	if len(cfg.Env) > 0 {
 		fmt.Fprintf(os.Stderr, "  both%s\n", envSummary(cfg.Env))
 	}
+	if note := packagingNote(cfg.A, cfg.B); note != "" {
+		fmt.Fprintf(os.Stderr, "  %s\n", note)
+	}
+	if cfg.Focus != "" {
+		fmt.Fprintf(os.Stderr, "  focus: %s\n", cfg.Focus)
+	}
+	if len(cfg.Code) > 0 {
+		fmt.Fprintf(os.Stderr, "  code: %s\n", strings.Join(cfg.Code, " "))
+	}
+	if len(cfg.Watch) > 0 {
+		fmt.Fprintf(os.Stderr, "  watch: %s\n", strings.Join(cfg.Watch, ", "))
+	}
+	fmt.Fprintf(os.Stderr, "  thresholds: %s\n", cfg.thresholdSummary())
 	fmt.Fprintf(os.Stderr, "  results → %s/   tags experiment:%s variant:<side>\n\n", root, experiment)
 	for i, r := range all {
 		skip := ""
@@ -374,7 +613,12 @@ func runAB(args []string) int {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fail("ab: %v", err)
 	}
-	os.WriteFile(filepath.Join(root, "aoc.yaml"), cfgSrc, 0o644)
+	if eff, err := yaml.Marshal(cfg); err == nil {
+		header := "# The test as it ran, flags included: aoc ab --config <this file> repeats it.\n"
+		os.WriteFile(filepath.Join(root, "aoc.yaml"), append([]byte(header), eff...), 0o644)
+	} else {
+		fmt.Fprintf(os.Stderr, "  aoc.yaml: %v\n", err)
+	}
 	started := time.Now()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -491,16 +735,16 @@ func runAB(args []string) int {
 
 	// The brief: what moved, and the evidence — per-process memory, the
 	// profiles diffed by function, telemetry, the agent's log.
-	workload := "`" + p.Name + "`"
+	workloadLabel := "`" + p.Name + "`"
 	if d := firstSentence(p.Description); d != "" {
-		workload += " (" + d + ")"
+		workloadLabel += " (" + d + ")"
 	}
 	conclusion := ""
 	if b, err := os.ReadFile(filepath.Join(root, "conclusion.md")); err == nil {
 		conclusion = strings.TrimSpace(stripConclusionHeader(string(b)))
 	}
 	in := findings.Input{Experiment: experiment, Cols: cols, Captures: abCaptures(cols, all), Threshold: cfg.Threshold, AppURL: ddapi.AppURLFromEnv(), ResultsDir: root,
-		Workload: workload, ConfigDiff: cfg.configDiff(), Source: findings.DetectSource(cfg.Source), Conclusion: conclusion,
+		Workload: workloadLabel, ConfigDiff: cfg.configDiff(), Source: findings.DetectSource(cfg.Source), Conclusion: conclusion,
 		Focus: cfg.Focus, Code: cfg.Code, Watch: cfg.Watch, Thresholds: cfg.Thresholds}
 	res := findings.Build(in)
 	findingsMD := findings.Markdown(res, in)
@@ -512,13 +756,13 @@ func runAB(args []string) int {
 	}
 
 	title := fmt.Sprintf("aoc A/B %s: %s vs %s", experiment, cfg.A.Name, cfg.B.Name)
-	opts := notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv(), Experiment: experiment, Findings: res}
+	opts := notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv(), Experiment: experiment, Findings: res, Name: cfg.Focus}
 	nb := notebook.ForAB(title, cols, opts)
 	nbFile := filepath.Join(root, "notebook.json")
 	nbURL, nbErr := createNotebook(context.Background(), nb, nbFile, ddapi.FromEnv(), !*mkNotebook)
 
 	headline := res.Headline
-	sum := abSummary{Experiment: experiment, Config: *config, Profile: cfg.Profile.String(), Started: started, Finished: time.Now(), Notebook: nbURL,
+	sum := abSummary{Experiment: experiment, Focus: cfg.Focus, Config: *config, Profile: cfg.Profile.String(), Started: started, Finished: time.Now(), Notebook: nbURL,
 		Threshold: cfg.Threshold, Summary: res.Summary, Findings: res.Findings,
 		Files: map[string]string{"findings": filepath.Join(root, "findings.md"), "findings_json": filepath.Join(root, "findings.json"), "compare": filepath.Join(root, "compare.md"), "notebook": nbFile}}
 	if res.Findings == nil {

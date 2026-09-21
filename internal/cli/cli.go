@@ -81,7 +81,7 @@ in the working directory is read first (like docker compose), so DD_API_KEY,
 DD_APP_KEY and DD_SUBDOMAIN there also serve the CLI's own Datadog calls.
 
 Quick start (Docker; DD_API_KEY in .env so metrics and profiles land in Datadog):
-  aoc ab                               # A/B the latest release vs the dev image in aoc.yaml
+  aoc ab --b datadog/agent-dev:my-branch-py3 --workload baseline --focus "why this build"
   cat results/<name>/findings.md       # what regressed, and the evidence (profiles, processes, telemetry)
   aoc conclude --results results/<name> "what it turned out to be"
   aoc run --profile profiles/baseline.yaml --name baseline   # one measured run
@@ -279,6 +279,20 @@ func (fs *flagSet) printFlag(w io.Writer, f *flag.Flag) {
 }
 
 func placeholder(f *flag.Flag) string {
+	switch f.Name {
+	case "a", "b":
+		return "IMAGE"
+	case "workload":
+		return "NAME|PATH"
+	case "focus":
+		return "TEXT"
+	case "code":
+		return "PKG"
+	case "watch":
+		return "METRIC"
+	case "env", "b-env":
+		return "K=V"
+	}
 	switch f.Value.(type) {
 	case durationFlag:
 		return "DUR"

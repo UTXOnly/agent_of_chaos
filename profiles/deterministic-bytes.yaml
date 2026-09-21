@@ -1,5 +1,5 @@
 name: deterministic-bytes
-description: Byte-identical input for A/B runs — seeded content, synthetic timestamps, a fixed 2,000,000-record budget written flat out across 8 streams. Every run feeds the agent exactly the same bytes, so wire bytes and CPU are directly comparable. (No e2e latency: timestamps are synthetic.)
+description: "Byte-identical input for A/B runs — seeded content, synthetic timestamps, a fixed 2,000,000-record budget written flat out across 8 streams. Every run feeds the agent exactly the same bytes, so wire bytes and CPU are directly comparable. (No e2e latency: timestamps are synthetic.)"
 duration: 4m
 warmup: 10s
 drain: 60s
