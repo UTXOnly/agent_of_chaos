@@ -289,7 +289,8 @@ type Telemetry struct {
 	First  float64 `json:"first"`
 	Last   float64 `json:"last"`
 	Delta  float64 `json:"delta"`
-	Rate   float64 `json:"rate"` // delta / seconds for counters
+	Rate   float64 `json:"rate"`           // delta / seconds for counters
+	Mean   float64 `json:"mean,omitempty"` // average over the window's scrapes, gauges only
 }
 
 type FaultEvent struct {

@@ -26,8 +26,11 @@ type MetricSeries struct {
 	FirstAt time.Time `json:"first_at"`
 	LastAt  time.Time `json:"last_at"`
 	Rate    float64   `json:"rate"` // per-second change over the last scrape interval (counters)
+	Mean    float64   `json:"mean"` // gauges: average of the scrapes since the rebase
 	prev    float64
 	prevAt  time.Time
+	sum     float64
+	n       int64
 }
 
 // agentObs holds what the intake observes about the agent under test: its
@@ -114,6 +117,7 @@ func (a *agentObs) rebase() {
 	now := time.Now()
 	for _, m := range a.metrics {
 		m.First, m.FirstAt = m.Value, now
+		m.sum, m.n, m.Mean = m.Value, 1, m.Value
 	}
 	a.procAcc = map[string]*procAcc{}
 	a.mu.Unlock()
@@ -269,6 +273,10 @@ func (a *agentObs) scrape(ctx context.Context, client *http.Client) error {
 			m.prev, m.prevAt = value, now
 		}
 		m.Value, m.LastAt = value, now
+		if m.Type != "counter" && !strings.HasSuffix(name, "_total") {
+			m.sum, m.n = m.sum+value, m.n+1
+			m.Mean = m.sum / float64(m.n)
+		}
 	}
 	if m := a.metrics["process_cpu_seconds_total"]; m != nil && m.Rate >= 0 && !m.prevAt.IsZero() {
 		a.procCPUPct = m.Rate * 100
