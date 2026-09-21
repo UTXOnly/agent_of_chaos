@@ -1,0 +1,487 @@
+# Tag-heavy fleet: 15 application containers, one log stream each, logging to
+# stdout so the agent collects them through the docker log driver and tags
+# every line with container_name/container_id/docker_image/image_name/
+# image_tag/short_image plus ~20 docker labels (DD_DOCKER_LABELS_AS_TAGS in
+# profiles/tag-heavy-fleet.yaml) and ~15 host tags (DD_EXTRA_TAGS). Stacked on
+# docker-compose.yml by that profile's `compose:`; container names are
+# <stack>-gen-app-NN-1, so the agent's include rule (^<stack>-gen-) picks
+# them up and only them.
+
+x-app: &app
+  image: agent-of-chaos:latest
+  # The agent's docker launcher tails a new container from where it is when
+  # it discovers it; without this pause the first second of every stream
+  # (seq 1..N) is lost on both sides and the gate fails for nothing.
+  entrypoint: ["sh", "-c", "sleep 20 && exec aoc generate"]
+  restart: unless-stopped
+  stop_grace_period: 20s
+  depends_on:
+    intake:
+      condition: service_healthy
+
+services:
+
+  gen-app-01:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-01
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-01'
+      team: 'payments'
+      tier: 'web'
+      owner: 'payments-oncall'
+      component: 'payments-web'
+      release: '2026.09.1'
+      build_id: 'b1037'
+      git_sha: '9e3779b1'
+      region: 'us-east-1'
+      zone: 'us-east-1b'
+      cluster: 'lab-1'
+      namespace: 'payments'
+      deployment: 'app-01-deploy'
+      pod_template_hash: '07919'
+      language: 'python'
+      framework: 'django'
+      cost_center: 'cc-101'
+      sla: 'silver'
+      pci: 'false'
+      canary: 'false'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-01"}]'
+
+  gen-app-02:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-02
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-02'
+      team: 'search'
+      tier: 'api'
+      owner: 'search-oncall'
+      component: 'search-api'
+      release: '2026.09.2'
+      build_id: 'b1074'
+      git_sha: '3c6ef363'
+      region: 'us-east-1'
+      zone: 'us-east-1c'
+      cluster: 'lab-1'
+      namespace: 'search'
+      deployment: 'app-02-deploy'
+      pod_template_hash: '15838'
+      language: 'java'
+      framework: 'spring'
+      cost_center: 'cc-102'
+      sla: 'bronze'
+      pci: 'true'
+      canary: 'false'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-02"}]'
+
+  gen-app-03:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-03
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-03'
+      team: 'checkout'
+      tier: 'worker'
+      owner: 'checkout-oncall'
+      component: 'checkout-worker'
+      release: '2026.09.3'
+      build_id: 'b1111'
+      git_sha: 'daa66d14'
+      region: 'us-east-1'
+      zone: 'us-east-1a'
+      cluster: 'lab-1'
+      namespace: 'checkout'
+      deployment: 'app-03-deploy'
+      pod_template_hash: '23757'
+      language: 'go'
+      framework: 'net/http'
+      cost_center: 'cc-103'
+      sla: 'gold'
+      pci: 'false'
+      canary: 'false'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-03"}]'
+
+  gen-app-04:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-04
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-04'
+      team: 'identity'
+      tier: 'web'
+      owner: 'identity-oncall'
+      component: 'identity-web'
+      release: '2026.09.4'
+      build_id: 'b1148'
+      git_sha: '78dde6c6'
+      region: 'us-east-1'
+      zone: 'us-east-1b'
+      cluster: 'lab-1'
+      namespace: 'identity'
+      deployment: 'app-04-deploy'
+      pod_template_hash: '31676'
+      language: 'python'
+      framework: 'django'
+      cost_center: 'cc-104'
+      sla: 'silver'
+      pci: 'true'
+      canary: 'false'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-04"}]'
+
+  gen-app-05:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-05
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-05'
+      team: 'catalog'
+      tier: 'api'
+      owner: 'catalog-oncall'
+      component: 'catalog-api'
+      release: '2026.09.5'
+      build_id: 'b1185'
+      git_sha: '17156078'
+      region: 'us-east-1'
+      zone: 'us-east-1c'
+      cluster: 'lab-1'
+      namespace: 'catalog'
+      deployment: 'app-05-deploy'
+      pod_template_hash: '39595'
+      language: 'java'
+      framework: 'spring'
+      cost_center: 'cc-105'
+      sla: 'bronze'
+      pci: 'false'
+      canary: 'true'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-05"}]'
+
+  gen-app-06:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-06
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-06'
+      team: 'payments'
+      tier: 'worker'
+      owner: 'payments-oncall'
+      component: 'payments-worker'
+      release: '2026.09.6'
+      build_id: 'b1222'
+      git_sha: 'b54cda29'
+      region: 'us-east-1'
+      zone: 'us-east-1a'
+      cluster: 'lab-1'
+      namespace: 'payments'
+      deployment: 'app-06-deploy'
+      pod_template_hash: '47514'
+      language: 'go'
+      framework: 'net/http'
+      cost_center: 'cc-106'
+      sla: 'gold'
+      pci: 'true'
+      canary: 'false'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-06"}]'
+
+  gen-app-07:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-07
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-07'
+      team: 'search'
+      tier: 'web'
+      owner: 'search-oncall'
+      component: 'search-web'
+      release: '2026.09.7'
+      build_id: 'b1259'
+      git_sha: '538453db'
+      region: 'us-east-1'
+      zone: 'us-east-1b'
+      cluster: 'lab-1'
+      namespace: 'search'
+      deployment: 'app-07-deploy'
+      pod_template_hash: '55433'
+      language: 'python'
+      framework: 'django'
+      cost_center: 'cc-107'
+      sla: 'silver'
+      pci: 'false'
+      canary: 'false'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-07"}]'
+
+  gen-app-08:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-08
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-08'
+      team: 'checkout'
+      tier: 'api'
+      owner: 'checkout-oncall'
+      component: 'checkout-api'
+      release: '2026.09.8'
+      build_id: 'b1296'
+      git_sha: 'f1bbcd8c'
+      region: 'us-east-1'
+      zone: 'us-east-1c'
+      cluster: 'lab-1'
+      namespace: 'checkout'
+      deployment: 'app-08-deploy'
+      pod_template_hash: '63352'
+      language: 'java'
+      framework: 'spring'
+      cost_center: 'cc-108'
+      sla: 'bronze'
+      pci: 'true'
+      canary: 'false'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-08"}]'
+
+  gen-app-09:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-09
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-09'
+      team: 'identity'
+      tier: 'worker'
+      owner: 'identity-oncall'
+      component: 'identity-worker'
+      release: '2026.09.9'
+      build_id: 'b1333'
+      git_sha: '8ff3473e'
+      region: 'us-east-1'
+      zone: 'us-east-1a'
+      cluster: 'lab-1'
+      namespace: 'identity'
+      deployment: 'app-09-deploy'
+      pod_template_hash: '71271'
+      language: 'go'
+      framework: 'net/http'
+      cost_center: 'cc-109'
+      sla: 'gold'
+      pci: 'false'
+      canary: 'false'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-09"}]'
+
+  gen-app-10:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-10
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-10'
+      team: 'catalog'
+      tier: 'web'
+      owner: 'catalog-oncall'
+      component: 'catalog-web'
+      release: '2026.09.10'
+      build_id: 'b1370'
+      git_sha: '2e2ac0f0'
+      region: 'us-east-1'
+      zone: 'us-east-1b'
+      cluster: 'lab-1'
+      namespace: 'catalog'
+      deployment: 'app-10-deploy'
+      pod_template_hash: '79190'
+      language: 'python'
+      framework: 'django'
+      cost_center: 'cc-110'
+      sla: 'silver'
+      pci: 'true'
+      canary: 'true'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-10"}]'
+
+  gen-app-11:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-11
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-11'
+      team: 'payments'
+      tier: 'api'
+      owner: 'payments-oncall'
+      component: 'payments-api'
+      release: '2026.09.11'
+      build_id: 'b1407'
+      git_sha: 'cc623aa1'
+      region: 'us-east-1'
+      zone: 'us-east-1c'
+      cluster: 'lab-1'
+      namespace: 'payments'
+      deployment: 'app-11-deploy'
+      pod_template_hash: '87109'
+      language: 'java'
+      framework: 'spring'
+      cost_center: 'cc-111'
+      sla: 'bronze'
+      pci: 'false'
+      canary: 'false'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-11"}]'
+
+  gen-app-12:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-12
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-12'
+      team: 'search'
+      tier: 'worker'
+      owner: 'search-oncall'
+      component: 'search-worker'
+      release: '2026.09.12'
+      build_id: 'b1444'
+      git_sha: '6a99b453'
+      region: 'us-east-1'
+      zone: 'us-east-1a'
+      cluster: 'lab-1'
+      namespace: 'search'
+      deployment: 'app-12-deploy'
+      pod_template_hash: '95028'
+      language: 'go'
+      framework: 'net/http'
+      cost_center: 'cc-112'
+      sla: 'gold'
+      pci: 'true'
+      canary: 'false'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-12"}]'
+
+  gen-app-13:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-13
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-13'
+      team: 'checkout'
+      tier: 'web'
+      owner: 'checkout-oncall'
+      component: 'checkout-web'
+      release: '2026.09.13'
+      build_id: 'b1481'
+      git_sha: '08d12e05'
+      region: 'us-east-1'
+      zone: 'us-east-1b'
+      cluster: 'lab-1'
+      namespace: 'checkout'
+      deployment: 'app-13-deploy'
+      pod_template_hash: '02948'
+      language: 'python'
+      framework: 'django'
+      cost_center: 'cc-113'
+      sla: 'silver'
+      pci: 'false'
+      canary: 'false'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-13"}]'
+
+  gen-app-14:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-14
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: json
+    labels:
+      app: 'app-14'
+      team: 'identity'
+      tier: 'api'
+      owner: 'identity-oncall'
+      component: 'identity-api'
+      release: '2026.09.14'
+      build_id: 'b1518'
+      git_sha: 'a708a7b6'
+      region: 'us-east-1'
+      zone: 'us-east-1c'
+      cluster: 'lab-1'
+      namespace: 'identity'
+      deployment: 'app-14-deploy'
+      pod_template_hash: '10867'
+      language: 'java'
+      framework: 'spring'
+      cost_center: 'cc-114'
+      sla: 'bronze'
+      pci: 'true'
+      canary: 'false'
+      traffic_class: 'internal'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-14"}]'
+
+  gen-app-15:
+    <<: *app
+    environment:
+      AOC_INTAKE: http://intake:8282
+      AOC_NAME: app-15
+      AOC_OUTPUT: stdout
+      AOC_FORMAT: plain
+    labels:
+      app: 'app-15'
+      team: 'catalog'
+      tier: 'worker'
+      owner: 'catalog-oncall'
+      component: 'catalog-worker'
+      release: '2026.09.15'
+      build_id: 'b1555'
+      git_sha: '45402168'
+      region: 'us-east-1'
+      zone: 'us-east-1a'
+      cluster: 'lab-1'
+      namespace: 'catalog'
+      deployment: 'app-15-deploy'
+      pod_template_hash: '18786'
+      language: 'go'
+      framework: 'net/http'
+      cost_center: 'cc-115'
+      sla: 'gold'
+      pci: 'false'
+      canary: 'true'
+      traffic_class: 'external'
+      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"app-15"}]'
