@@ -75,10 +75,14 @@ type Input struct {
 	AppURL     string
 	ResultsDir string
 	Margin     time.Duration
-	Workload   string   // profile name and description
-	ConfigDiff []string // what only one side had, e.g. "tagfilter only: DD_X=1"
-	Source     string   // a checkout of the agent's repository, for the code section
-	Conclusion string   // conclusion.md, once written
+	Workload   string             // profile name and description
+	ConfigDiff []string           // what only one side had, e.g. "tagfilter only: DD_X=1"
+	Source     string             // a checkout of the agent's repository, for the code section
+	Conclusion string             // conclusion.md, once written
+	Focus      string             // the question this test answers (--focus), verbatim
+	Code       []string           // packages under test, e.g. pkg/logs/sender: profile movers here are shown first
+	Watch      []string           // extra compare.md metric names promoted to the headline
+	Thresholds map[string]float64 // percent per signal (throughput, saturation, cpu, memory); Threshold is the fallback
 }
 
 // Result is the brief.

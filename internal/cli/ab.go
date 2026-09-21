@@ -34,22 +34,26 @@ func init() {
 // ABConfig is aoc.yaml: two agents, one workload, where the results go. The
 // shipped aoc.yaml documents every field.
 type ABConfig struct {
-	Name      string            `yaml:"name"`
-	Profile   ProfileRef        `yaml:"profile"`
-	Duration  gen.Duration      `yaml:"duration"`
-	Warmup    gen.Duration      `yaml:"warmup"`
-	Drain     gen.Duration      `yaml:"drain"`
-	Runs      int               `yaml:"runs"`
-	Pause     gen.Duration      `yaml:"pause"`
-	Parallel  *bool             `yaml:"parallel"` // both sides at once (default), or one after the other
-	A         Variant           `yaml:"a"`
-	B         Variant           `yaml:"b"`
-	Env       map[string]string `yaml:"env"`
-	Results   string            `yaml:"results"`
-	Notebook  *bool             `yaml:"notebook"`
-	Compose   []string          `yaml:"compose"`
-	Threshold float64           `yaml:"threshold"` // percent; a headline change below it is noise
-	Source    string            `yaml:"source"`    // a checkout of the agent's repository, for the code section
+	Name       string             `yaml:"name"`
+	Profile    ProfileRef         `yaml:"profile"`
+	Duration   gen.Duration       `yaml:"duration"`
+	Warmup     gen.Duration       `yaml:"warmup"`
+	Drain      gen.Duration       `yaml:"drain"`
+	Runs       int                `yaml:"runs"`
+	Pause      gen.Duration       `yaml:"pause"`
+	Parallel   *bool              `yaml:"parallel"` // both sides at once (default), or one after the other
+	A          Variant            `yaml:"a"`
+	B          Variant            `yaml:"b"`
+	Env        map[string]string  `yaml:"env"`
+	Results    string             `yaml:"results"`
+	Notebook   *bool              `yaml:"notebook"`
+	Compose    []string           `yaml:"compose"`
+	Threshold  float64            `yaml:"threshold"`  // percent; a headline change below it is noise
+	Source     string             `yaml:"source"`     // a checkout of the agent's repository, for the code section
+	Focus      string             `yaml:"focus"`      // the question this test answers; usually from --focus
+	Code       []string           `yaml:"code"`       // packages under test, e.g. pkg/logs/sender
+	Watch      []string           `yaml:"watch"`      // extra compare.md metrics promoted to the headline
+	Thresholds map[string]float64 `yaml:"thresholds"` // percent per signal: throughput, saturation, cpu, memory
 }
 
 // Variant is one side of the test: an image and what applies to it only.
@@ -496,7 +500,8 @@ func runAB(args []string) int {
 		conclusion = strings.TrimSpace(stripConclusionHeader(string(b)))
 	}
 	in := findings.Input{Experiment: experiment, Cols: cols, Captures: abCaptures(cols, all), Threshold: cfg.Threshold, AppURL: ddapi.AppURLFromEnv(), ResultsDir: root,
-		Workload: workload, ConfigDiff: cfg.configDiff(), Source: findings.DetectSource(cfg.Source), Conclusion: conclusion}
+		Workload: workload, ConfigDiff: cfg.configDiff(), Source: findings.DetectSource(cfg.Source), Conclusion: conclusion,
+		Focus: cfg.Focus, Code: cfg.Code, Watch: cfg.Watch, Thresholds: cfg.Thresholds}
 	res := findings.Build(in)
 	findingsMD := findings.Markdown(res, in)
 	os.WriteFile(filepath.Join(root, "findings.md"), []byte(findingsMD), 0o644)
