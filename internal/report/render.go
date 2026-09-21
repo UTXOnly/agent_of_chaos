@@ -293,16 +293,16 @@ func Summary(r *Report) string {
 	if len(gens) > 0 {
 		p("**Workload** %s\n\n", strings.Join(gens, "; "))
 	}
-	verdict := "✅ every record delivered exactly once"
+	verdict := "every record delivered exactly once"
 	switch {
 	case d.GeneratedRecords == 0:
-		verdict = "⚠️ no generator counters were received"
+		verdict = "no generator counters were received"
 	case d.Missing > 0 && d.Duplicates > 0:
-		verdict = fmt.Sprintf("❌ %s records lost and %s duplicated", fmtutil.Int(d.Missing), fmtutil.Int(d.Duplicates))
+		verdict = fmt.Sprintf("%s records lost and %s duplicated", fmtutil.Int(d.Missing), fmtutil.Int(d.Duplicates))
 	case d.Missing > 0:
-		verdict = fmt.Sprintf("❌ %s records lost (%s delivered)", fmtutil.Int(d.Missing), pctOf(d.Unique, d.GeneratedRecords))
+		verdict = fmt.Sprintf("%s records lost (%s delivered)", fmtutil.Int(d.Missing), pctOf(d.Unique, d.GeneratedRecords))
 	case d.Duplicates > 0:
-		verdict = fmt.Sprintf("⚠️ nothing lost, but %s duplicates", fmtutil.Int(d.Duplicates))
+		verdict = fmt.Sprintf("nothing lost, but %s duplicates", fmtutil.Int(d.Duplicates))
 	}
 	if !d.AllFinal && d.Missing > 0 {
 		verdict += " — generators were still running, so some of this may be in flight"

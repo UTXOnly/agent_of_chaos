@@ -301,7 +301,7 @@ func (s *Server) buildReport(withGaps bool) *report.Report {
 
 	if s.agent != nil {
 		for _, m := range s.agent.series() {
-			t := report.Telemetry{Name: m.Name, Labels: m.Labels, Type: m.Type, First: m.First, Last: m.Value, Delta: m.Value - m.First}
+			t := report.Telemetry{Name: m.Name, Labels: m.Labels, Type: m.Type, First: m.First, Last: m.Value, Delta: m.Value - m.First, Mean: m.Mean}
 			if (m.Type == "counter") && r.Seconds > 0 {
 				t.Rate = t.Delta / r.Seconds
 			}

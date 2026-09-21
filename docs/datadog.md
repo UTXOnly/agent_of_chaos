@@ -98,9 +98,11 @@ the local diff points at) or `get_profiling_timeseries` grouped by
 `aoc: measurement window opened`, `aoc: faults set|clear`, and whatever
 `POST /harness/mark?text=…` posts (`aoc run` marks window closed, generators
 stopped, drain finished). Query them with `source:aoc run:<name>`. A finished
-A/B test posts `aoc: A/B <name> finished — a vs b` with the verdict and the
-regressions as Markdown (`experiment:<name>`), and `aoc conclude` posts
-`aoc: A/B <name> conclusion` next to it.
+A/B test posts `aoc: A/B <name> finished — a vs b` as Markdown
+(`experiment:<name>`): the verdict line (`pass`, `fail: <what the delivery
+gate caught>` or `regression: <signals>`), the signals that moved, the gate
+line and the notebook link. `aoc conclude` posts `aoc: A/B <name>
+conclusion` next to it.
 
 ## Notebooks
 
@@ -114,7 +116,7 @@ and each run's key cells are pinned to that run's window.
 
 `aoc ab` builds an *A/B* notebook instead, in the order an investigation
 reads it: what was tested and what differed (only the rows that moved);
-the conclusion once `aoc conclude` has written one; one cell per topic
+the conclusion once `aoc conclude` has written one; one cell per signal
 that regressed with its reading and evidence (memory by process and
 cgroup, the profile movers with their source lines, telemetry, log); the
 profiles and the code behind the movers; each side's profiler embedded as
