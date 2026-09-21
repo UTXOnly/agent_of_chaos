@@ -2,6 +2,8 @@ package notebook
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -59,17 +61,46 @@ func TestForCompare(t *testing.T) {
 	}
 }
 
+// cellKinds lists every cell as "<type>: <title or first markdown line>",
+// which is what an A/B notebook's structure comes down to.
+func cellKinds(nb *Notebook) []string {
+	var out []string
+	for _, c := range nb.Cells {
+		def := c["attributes"].(map[string]any)["definition"].(map[string]any)
+		switch def["type"] {
+		case "markdown":
+			out = append(out, "markdown: "+strings.SplitN(def["text"].(string), "\n", 2)[0])
+		case "iframe":
+			out = append(out, "iframe")
+		default:
+			out = append(out, fmt.Sprintf("%v: %v", def["type"], def["title"]))
+		}
+	}
+	return out
+}
+
 func TestForAB(t *testing.T) {
 	a := sample("exp-a") // 22:13:20 → 22:16:20
 	b := sample("exp-b")
 	b.WindowStart, b.WindowEnd = a.WindowStart.Add(5*time.Minute), a.WindowEnd.Add(5*time.Minute)
 	cols := []report.Column{{Name: "release", Runs: []*report.Report{a}}, {Name: "candidate", Runs: []*report.Report{b}}}
 	nb := ForAB("aoc A/B exp", cols, Options{Experiment: "exp", AppURL: "https://x.datadoghq.com"})
-	// Without findings: header, the side-by-side profiler (a heading, then
-	// a caption and an iframe for CPU, heap and allocations), timeline, the
-	// two default charts (CPU, memory), notes.
-	if nb.Name != "aoc A/B exp" || len(nb.Cells) != 1+7+1+2+1 {
-		t.Fatalf("name=%q cells=%d", nb.Name, len(nb.Cells))
+	// Without findings: the header, the flame-graph intro and the whole
+	// agent's CPU, then the four signals.
+	want := []string{
+		"markdown: - **release** — agent 7.79.0",
+		"markdown: ## Flame graphs",
+		"iframe",
+		"timeseries: Received vs generated (records/s)",
+		"timeseries: Pipeline utilization by component",
+		"timeseries: Core agent CPU (%)",
+		"timeseries: Core agent memory (RSS, anon)",
+	}
+	if got := cellKinds(nb); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cells:\n got %q\nwant %q", got, want)
+	}
+	if nb.Name != "aoc A/B exp" {
+		t.Errorf("name = %q", nb.Name)
 	}
 	// The window is the later run's, ±60 s.
 	if !nb.Start.Equal(b.WindowStart.Add(-time.Minute)) || !nb.End.Equal(b.WindowEnd.Add(time.Minute)) {
@@ -77,21 +108,20 @@ func TestForAB(t *testing.T) {
 	}
 	s := string(nb.Body())
 	for _, want := range []string{
-		`"query": "timeshift(avg:aoc.agent.container.cpu_percent{run:exp-a}, -300)"`, // a shifted onto b
-		`"alias": "release: container (docker stats via intake)"`,
-		`"query": "avg:aoc.agent.container.cpu_percent{run:exp-b}"`, // the anchor is not shifted
-		`sum:aoc.intake.logs_per_sec{experiment:exp} by {variant}`,  // the real-time timeline
+		`"query": "timeshift(avg:aoc.agent.process.cpu_percent{run:exp-a}, -300)"`, // a shifted onto b
+		`"alias": "release"`, // the side name, nothing else
+		`"query": "avg:aoc.agent.process.cpu_percent{run:exp-b}"`,                           // the anchor is not shifted
+		`avg:aoc.agent.telemetry.logs_component_utilization.ratio{run:exp-b} by {run,name}`, // grouped: run joins the group-by
 		`"type": "iframe"`, // json escapes & in the body: b is the main query, a the compare_query_A
 		"/profiling/comparison?query=service%3Adatadog-agent+run%3Aexp-b\\u0026start=",
 		"compare_query_A=service%3Adatadog-agent+run%3Aexp-a\\u0026compare_start_A=",
-		"profile_type=heap-live-size\\u0026viz=flame_graph",
-		"source%3Aaoc+run%3Aexp-b",
+		"profile_type=cpu-time\\u0026viz=flame_graph",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("body missing %q", want)
 		}
 	}
-	for _, unwanted := range []string{"## All metrics", "# aoc A/B exp", "logs_component_utilization"} {
+	for _, unwanted := range []string{"## All metrics", "# aoc A/B exp", "### Notes", "Timeline:", "heap-live-size", "docker stats via intake"} {
 		if strings.Contains(s, unwanted) {
 			t.Errorf("body should not contain %q", unwanted)
 		}
@@ -101,28 +131,43 @@ func TestForAB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// With findings: tested/differed header, the conclusion, one cell per
-	// regressed topic, profiles+code, the side-by-side profiler (no
-	// movers without profiles), the timeline, the topic's charts, notes.
+	// With findings: the brief leads (tested/differed, the conclusion, one
+	// cell per regressed topic, profiles and code), then the flame graphs
+	// (no movers without profiles) and the same four signals.
 	b.Resources.ContainerMemMax, a.Resources.ContainerMemMax = 600e6, 200e6
 	b.Resources.ContainerAnonMax, a.Resources.ContainerAnonMax = 580e6, 180e6
 	res := findings.Build(findings.Input{Experiment: "exp", Cols: cols, Threshold: 10, Conclusion: "It is the python runner."})
 	nb = ForAB("aoc A/B exp", cols, Options{Experiment: "exp", Findings: res})
-	if len(nb.Cells) != 1+1+1+1+7+1+3+1 {
-		t.Fatalf("cells with one regression topic = %d", len(nb.Cells))
+	want = []string{
+		"markdown: ## What we tested",
+		"markdown: ## Conclusion",
+		"markdown: ## Where",
+		"markdown: ## Profiles",
+		"markdown: ## Flame graphs",
+		"iframe",
+		"timeseries: Received vs generated (records/s)",
+		"timeseries: Pipeline utilization by component",
+		"timeseries: Core agent CPU (%)",
+		"timeseries: Core agent memory (RSS, anon)",
+	}
+	if got := cellKinds(nb); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cells with one regression topic:\n got %q\nwant %q", got, want)
 	}
 	s = string(nb.Body())
-	for _, want := range []string{"## What we tested", "## What differed (threshold ±10%)", "## Conclusion", "It is the python runner.", "## Where", "### Memory", "Where the memory is",
-		"agent container mem max 200.0 MB → 600.0 MB", "## Profiles", `timeshift(avg:aoc.agent.proc.rss_bytes{run:exp-a} by {run,proc}, -300)`, "Agent container memory: anon (processes) vs file cache"} {
+	for _, want := range []string{"## What we tested", "## What differed (threshold ±10%)", "It is the python runner.", "### Memory", "Where the memory is",
+		"agent container mem max 200.0 MB → 600.0 MB", `timeshift(avg:aoc.agent.container.memory_anon_bytes{run:exp-a}, -300)`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("findings notebook missing %q", want)
 		}
 	}
-	second, _ := json.Marshal(nb.Cells[1])
-	if !strings.Contains(string(second), "## Conclusion") {
-		t.Error("the conclusion should come right after the header")
-	}
 	if strings.Contains(s, "Latency, written") {
-		t.Error("charts unrelated to the regression should be left out")
+		t.Error("charts unrelated to the four signals should be left out")
+	}
+
+	// The faults chart is only there when a run injected one.
+	b.Faults = []report.FaultEvent{{At: b.WindowStart, Desc: "drop 10% of connections"}}
+	nb = ForAB("aoc A/B exp", cols, Options{Experiment: "exp", Findings: res})
+	if got := cellKinds(nb); !reflect.DeepEqual(got, append(want, "timeseries: Injected faults")) {
+		t.Errorf("faults chart: got %q", got)
 	}
 }
