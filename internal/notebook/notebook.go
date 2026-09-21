@@ -40,7 +40,7 @@ type Options struct {
 	AgentContainer string
 	AgentHost      string
 	// Experiment is the experiment:<name> tag shared by the runs of an A/B
-	// test (ForAB); it drives the real-time timeline cell.
+	// test (ForAB); the brief's cells use it to scope their links.
 	Experiment string
 	// Findings is the A/B brief (ForAB): the regressions and their evidence
 	// lead the notebook, the charts follow.
@@ -216,9 +216,42 @@ var runCharts = []chart{
 // keyCharts are the subset used per run in comparison notebooks.
 var keyCharts = []int{0, 1, 2, 3, 5, 6, 7}
 
-// abCharts are the charts an A/B notebook overlays: delivery, latency and
-// the agent's resources. The rest are one `aoc notebook --results` away.
-var abCharts = []int{0, 1, 2, 5, 6, 14, 15, 9, 7}
+// abCharts are the four signals a logs-pipeline A/B test is judged on
+// — throughput, pipeline saturation, CPU, memory — one chart each, both
+// sides overlaid. Every other metric is in compare.md or one
+// `aoc notebook --results` away.
+var abCharts = []chart{
+	{"Received vs generated (records/s)", "records/s", func(sc, p, _ string) []query {
+		return []query{q("sum", p+".intake.logs_per_sec", sc, "received"), q("sum", p+".gen.records_per_sec", sc, "generated")}
+	}},
+	{"Pipeline utilization by component", "ratio", func(sc, p, _ string) []query {
+		return []query{{q: fmt.Sprintf("avg:%s.agent.telemetry.logs_component_utilization.ratio{%s} by {name}", p, sc)}}
+	}},
+	{"Core agent CPU (%)", "%", func(sc, p, _ string) []query {
+		return []query{q("avg", p+".agent.process.cpu_percent", sc, "")}
+	}},
+	{"Core agent memory (RSS, anon)", "bytes", func(sc, p, _ string) []query {
+		return []query{q("avg", p+".agent.process.rss_bytes", sc, "RSS"), q("avg", p+".agent.container.memory_anon_bytes", sc, "anon")}
+	}},
+}
+
+// faultsChart is appended only when a run injected faults; with none it
+// is flat lines at zero.
+var faultsChart = chart{"Injected faults", "", func(sc, p, _ string) []query {
+	return []query{q("max", p+".intake.faults.active", sc, "active"), q("sum", p+".intake.faults.dropped_per_sec", sc, "dropped"),
+		q("sum", p+".intake.faults.errored_per_sec", sc, "errored")}
+}}
+
+func anyFaults(cols []report.Column) bool {
+	for _, c := range cols {
+		for _, r := range c.Runs {
+			if len(r.Faults) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func scopeFor(r *report.Report) string { return "run:" + r.Name }
 
@@ -288,10 +321,10 @@ func ForCompare(reports []*report.Report, o Options) *Notebook {
 // ForAB builds the notebook of an A/B test, in the order an investigation
 // reads it: what was tested and what differed; the conclusion once there
 // is one; one cell per topic that regressed, with its evidence; the
-// profiles diffed by function and located in the code, with each side's
-// flame graph embedded; then only the charts that bear on what moved, all
-// runs overlaid (each earlier run time-shifted onto the latest one's
-// window, to which the cells are pinned).
+// profiles diffed by function and located in the code, then the flame
+// graphs — the whole agent, then each mover; then the signals the test
+// is judged on, both sides overlaid (each earlier run time-shifted onto
+// the latest one's window, to which the cells are pinned).
 func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	o.defaults()
 	if o.Name != "" {
@@ -314,17 +347,20 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	if len(runs) == 0 {
 		return &Notebook{Name: truncate(title, 80), Type: "investigation"}
 	}
-	anchor, first := runs[0].r, runs[0].r
+	anchor := runs[0].r
 	var longest time.Duration
+	var timeshifted bool
 	for _, x := range runs {
 		if x.r.WindowStart.After(anchor.WindowStart) {
 			anchor = x.r
 		}
-		if x.r.WindowStart.Before(first.WindowStart) {
-			first = x.r
-		}
 		if d := x.r.WindowEnd.Sub(x.r.WindowStart); d > longest {
 			longest = d
+		}
+	}
+	for _, x := range runs {
+		if anchor.WindowStart.Sub(x.r.WindowStart).Round(time.Second) > 0 {
+			timeshifted = true
 		}
 	}
 	start, end := anchor.WindowStart.Add(-o.Margin), anchor.WindowStart.Add(longest).Add(o.Margin)
@@ -355,7 +391,6 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	}
 
 	// 3. One cell per topic that moved.
-	var topics []string
 	if f != nil {
 		for i, sec := range f.Sections {
 			text := findings.SectionMarkdown(sec)
@@ -363,13 +398,12 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 				text = "## Where\n\n" + text
 			}
 			nb.Cells = append(nb.Cells, markdown(text))
-			topics = append(topics, sec.Topic)
 		}
 	}
 
 	// 4. The profiles and the code behind the movers, then the profiler's
-	// comparison view (same-origin iframes): a's flame graph beside b's for
-	// CPU, live heap and allocations, then one per mover, focused on it.
+	// comparison view (same-origin iframes): the whole agent's CPU, then
+	// one per mover, focused on it.
 	if f != nil {
 		var pc strings.Builder
 		pc.WriteString("## Profiles\n\n" + findings.ProfilesMarkdown(f, in))
@@ -378,18 +412,14 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		}
 		nb.Cells = append(nb.Cells, markdown(pc.String()))
 	}
-	nb.Cells = append(nb.Cells, compareCells(f, cols, &o)...)
+	nb.Cells = append(nb.Cells, compareCells(f, cols, &o, timeshifted)...)
 
-	// 5. The session in real time, then the charts that bear on what moved.
-	if o.Experiment != "" {
-		sc := "experiment:" + o.Experiment
-		span := timeseries("Timeline: the runs as they happened (records/s by variant)",
-			[]query{{q: fmt.Sprintf("sum:%s.intake.logs_per_sec{%s} by {variant}", o.Prefix, sc)}, {q: fmt.Sprintf("sum:%s.gen.records_per_sec{%s} by {variant}", o.Prefix, sc)}},
-			first.WindowStart.Add(-o.Margin), latestEnd(cols).Add(o.Margin), "records/s")
-		nb.Cells = append(nb.Cells, span)
+	// 5. The four signals the verdict rests on, both sides overlaid.
+	charts := abCharts
+	if anyFaults(cols) {
+		charts = append(append([]chart{}, charts...), faultsChart)
 	}
-	for _, i := range chartsFor(topics) {
-		c := runCharts[i]
+	for _, c := range charts {
 		var qs []query
 		for _, x := range runs {
 			delta := anchor.WindowStart.Sub(x.r.WindowStart).Round(time.Second)
@@ -399,60 +429,29 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		}
 		nb.Cells = append(nb.Cells, timeseries(c.title, qs, start, end, c.unit))
 	}
-	nb.Cells = append(nb.Cells, markdown(digDeeperAB(cols, &o, anchor)))
 	return nb
 }
 
-// topicCharts are the runCharts that bear on each topic.
-var topicCharts = map[string][]int{
-	"memory":    {6, 14, 15},
-	"cpu":       {5},
-	"latency":   {2, 9},
-	"delivery":  {0, 1},
-	"bytes":     {7},
-	"tags":      {7},
-	"stability": {5, 6},
-}
-
-// chartsFor picks the charts for the topics that moved; with nothing
-// moving, the agent's CPU and memory.
-func chartsFor(topics []string) []int {
-	var out []int
-	seen := map[int]bool{}
-	for _, t := range topics {
-		for _, i := range topicCharts[t] {
-			if !seen[i] {
-				seen[i] = true
-				out = append(out, i)
-			}
-		}
-	}
-	if len(out) == 0 {
-		return []int{5, 6}
-	}
-	return out
-}
-
-// compareCells are the side-by-side flame graphs: the whole agent for
-// each profile type the profiler has, then one focused on each mover
-// the brief located. Each is headed by a markdown cell that says what
-// the two panes are.
-func compareCells(f *findings.Result, cols []report.Column, o *Options) []Cell {
+// compareCells are the side-by-side flame graphs: the whole agent's CPU,
+// then one comparison focused on each mover the brief located. The other
+// profile types are in the Profiles section's tables and a click away in
+// the profiler, which is worth more than two more xl iframes.
+func compareCells(f *findings.Result, cols []report.Column, o *Options, timeshifted bool) []Cell {
 	if len(cols) < 2 || len(cols[0].Runs) == 0 || len(cols[1].Runs) == 0 {
 		return nil
 	}
 	a, b := cols[0].Runs[0], cols[1].Runs[0]
-	var cells []Cell
-	head := fmt.Sprintf("## Flame graphs, side by side\n\nA = **%s** (`run:%s`), B = **%s** (`run:%s`), each over its own window. Frames only one side has are coloured; the bar under B is the difference. Filter or focus inside the pane, or open it in the profiler with ↗.\n", cols[0].Name, a.Name, cols[1].Name, b.Name)
-	cells = append(cells, markdown(head))
-	for _, pt := range []struct{ typ, label string }{{"cpu-time", "CPU"}, {"heap-live-size", "heap live size"}, {"alloc-size", "allocations"}} {
-		cells = append(cells, markdown(fmt.Sprintf("### %s — whole agent\n", pt.label)), iframe(findings.CompareURL(a, b, o.AppURL, o.Margin, pt.typ, "")))
+	intro := fmt.Sprintf("## Flame graphs\n\nA = **%s** (`run:%s`) beside B = **%s** (`run:%s`), each over its own window: frames only one side has are coloured and the bar under B is the difference — the whole agent's CPU first, then one comparison per profile mover, focused on that function.",
+		cols[0].Name, a.Name, cols[1].Name, b.Name)
+	if timeshifted {
+		intro += " The charts below overlay the runs on one axis, each earlier run shifted onto the latest one's window with `timeshift`, so the same second of the measured window lines up."
 	}
+	cells := []Cell{markdown(intro + "\n"), iframe(findings.CompareURL(a, b, o.AppURL, o.Margin, "cpu-time", ""))}
 	if f == nil {
 		return cells
 	}
 	for _, m := range findings.Movers(f) {
-		cells = append(cells, markdown(fmt.Sprintf("### `%s` — %s, %s\n\nFocused on `%s`: the stacks under it on each side.\n", m.Function, m.View, m.Delta, m.Focus)),
+		cells = append(cells, markdown(fmt.Sprintf("### `%s` — %s, %s\n", m.Function, m.View, m.Delta)),
 			iframe(findings.CompareURL(a, b, o.AppURL, o.Margin, m.ProfileType, m.Focus)))
 	}
 	return cells
@@ -465,19 +464,6 @@ func iframe(url string) Cell {
 		"definition": map[string]any{"type": "iframe", "url": url},
 		"graph_size": "xl",
 	}}
-}
-
-// latestEnd is the latest window end across all columns.
-func latestEnd(cols []report.Column) time.Time {
-	var end time.Time
-	for _, c := range cols {
-		for _, x := range c.Runs {
-			if x.WindowEnd.After(end) {
-				end = x.WindowEnd
-			}
-		}
-	}
-	return end
 }
 
 // shifted moves a run's query forward by delta onto the anchor window and
@@ -497,26 +483,6 @@ func shifted(q query, label string, delta time.Duration) query {
 		out.q = fmt.Sprintf("timeshift(%s, -%d)", out.q, int64(delta.Seconds()))
 	}
 	return out
-}
-
-func digDeeperAB(cols []report.Column, o *Options, anchor *report.Report) string {
-	app := o.AppURL
-	var b strings.Builder
-	fmt.Fprintf(&b, "### Notes\n\n")
-	fmt.Fprintf(&b, "The charts overlay the runs on one time axis: `%s` is drawn at its real time and each earlier run is shifted forward onto it with `timeshift`, so the same second of the measured window lines up.", anchor.Name)
-	if o.Experiment != "" {
-		fmt.Fprintf(&b, " Every run carries `experiment:%s` and `variant:<side>` on its `%s.*` metrics, events and the agent's own metrics and profiles.", o.Experiment, o.Prefix)
-	}
-	b.WriteString("\n\n")
-	for _, c := range cols {
-		for _, r := range c.Runs {
-			from, to := r.WindowStart.Add(-o.Margin).UnixMilli(), r.WindowEnd.Add(o.Margin).UnixMilli()
-			evQ := url.QueryEscape("source:aoc run:" + r.Name)
-			fmt.Fprintf(&b, "- **%s** `run:%s` %s → %s UTC: [events](%s/event/explorer?query=%s&from_ts=%d&to_ts=%d)\n", c.Name, r.Name, r.WindowStart.UTC().Format("15:04:05"), r.WindowEnd.UTC().Format("15:04:05"), app, evQ, from, to)
-		}
-	}
-	fmt.Fprintf(&b, "\n`findings.md` (this brief), `compare.md` (every metric), each run's `report.md` / `profiles/` / `agent.log`, and the `aoc.yaml` that ran are in the results directory.\n")
-	return b.String()
 }
 
 func digDeeper(r *report.Report, o *Options) string {
