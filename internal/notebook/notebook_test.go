@@ -121,7 +121,7 @@ func TestForAB(t *testing.T) {
 			t.Errorf("body missing %q", want)
 		}
 	}
-	for _, unwanted := range []string{"## All metrics", "# aoc A/B exp", "### Notes", "Timeline:", "heap-live-size", "docker stats via intake"} {
+	for _, unwanted := range []string{"## All metrics", "# aoc A/B exp", "### Notes", "Timeline:", "heap-live-size", "docker stats via intake", "What differed", "If that is not enough"} {
 		if strings.Contains(s, unwanted) {
 			t.Errorf("body should not contain %q", unwanted)
 		}
@@ -134,12 +134,11 @@ func TestForAB(t *testing.T) {
 	// With findings: the brief leads (tested/differed, the conclusion, one
 	// cell per regressed topic, profiles and code), then the flame graphs
 	// (no movers without profiles) and the same four signals.
-	b.Resources.ContainerMemMax, a.Resources.ContainerMemMax = 600e6, 200e6
-	b.Resources.ContainerAnonMax, a.Resources.ContainerAnonMax = 580e6, 180e6
+	b.Resources.ProcessRSSMax, a.Resources.ProcessRSSMax = 600e6, 200e6
 	res := findings.Build(findings.Input{Experiment: "exp", Cols: cols, Threshold: 10, Conclusion: "It is the python runner."})
 	nb = ForAB("aoc A/B exp", cols, Options{Experiment: "exp", Findings: res})
 	want = []string{
-		"markdown: ## What we tested",
+		"markdown: **regression: memory**",
 		"markdown: ## Conclusion",
 		"markdown: ## Where",
 		"markdown: ## Profiles",
@@ -154,8 +153,8 @@ func TestForAB(t *testing.T) {
 		t.Fatalf("cells with one regression topic:\n got %q\nwant %q", got, want)
 	}
 	s = string(nb.Body())
-	for _, want := range []string{"## What we tested", "## What differed (threshold ±10%)", "It is the python runner.", "### Memory", "Where the memory is",
-		"agent container mem max 200.0 MB → 600.0 MB", `timeshift(avg:aoc.agent.container.memory_anon_bytes{run:exp-a}, -300)`} {
+	for _, want := range []string{"| signal | metric | release | candidate |", "| memory | core agent RSS max | 200.0 MB | 600.0 MB |", "Delivery gate:", "## Tested", "It is the python runner.", "### Memory",
+		`timeshift(avg:aoc.agent.container.memory_anon_bytes{run:exp-a}, -300)`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("findings notebook missing %q", want)
 		}

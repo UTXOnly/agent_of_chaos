@@ -111,16 +111,15 @@ func TestMemoryRegressionAndBrief(t *testing.T) {
 	md := Markdown(res, in)
 	for _, want := range []string{
 		"# aoc A/B x\n\n**regression: memory**",
-		"- memory regressed: core agent RSS max 250.0 MB → 320.0 MB (+28.0%, threshold ±10%)",
+		"| memory | core agent RSS max | 250.0 MB | 320.0 MB | **+28.0%** | ±10% |",
 		"| signal | metric | release | dev | Δ | threshold |",
-		"| memory | core agent RSS max | 250.0 MB | 320.0 MB | +28.0% | ±10% |",
 		"Throughput: held by the generators at 10.0k/s and both sides kept up, so saturation carries the signal.",
 		"Delivery gate: pass — nothing lost, duplicated, orphaned or truncated in dev. Delivery ratio 100.00% → 100.00%.",
 		"## Tested\n\n| side | image | version | commit | only this side |",
 		"| release | `datadog/agent:7` | 7.83.2 | – | – |",
 		"| dev | `datadog/agent:7` | 7.83.2 | – | `DD_X=1` |",
 		"Workload `baseline` (steady mix) — 16 streams at 10.0k/s, 10m00s window, 1 round per side.",
-		"## Where\n\n### memory\n\nThe core agent's Go heap grew",
+		"## Where\n\n### Memory\n\nThe core agent's Go heap grew",
 		"Next: `explore_profiling_flame_graph`",
 		"Every metric, the process table and the telemetry counters: `compare.md`.",
 	} {
@@ -187,7 +186,7 @@ func TestGateFails(t *testing.T) {
 		t.Errorf("findings: %+v", res.Findings)
 	}
 	md := Markdown(res, in)
-	if !strings.Contains(md, "**fail: 1,200 lost / missing in dev") || !strings.Contains(md, "### delivery") {
+	if !strings.Contains(md, "**fail: 1,200 lost / missing in dev") || !strings.Contains(md, "### Delivery") {
 		t.Errorf("markdown: %s", md)
 	}
 	// Out of order is reported in the gate line without failing it.

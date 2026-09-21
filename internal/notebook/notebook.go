@@ -368,16 +368,25 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 	f := o.Findings
 	in := findings.Input{Experiment: o.Experiment, Cols: cols, AppURL: o.AppURL, Margin: o.Margin}
 
-	// 1. What we tested, what differed.
+	// 1. The verdict, the signals against their thresholds, the gate, and
+	// what was tested: the same first screen as findings.md.
 	var head strings.Builder
 	if f != nil {
-		fmt.Fprintf(&head, "## What we tested\n\n%s\n\n## What differed (threshold ±%.0f%%)\n\n", f.Tested, f.Threshold)
-		for _, v := range f.Verdict {
-			fmt.Fprintf(&head, "- %s\n", v)
+		if len(f.Verdict) > 0 {
+			fmt.Fprintf(&head, "**%s**\n\n", f.Verdict[0])
 		}
-		if t := findings.ChangedTable(f, cols); t != "" {
-			fmt.Fprintf(&head, "\n%s", t)
+		if t := findings.SignalsTable(f, cols); t != "" {
+			head.WriteString(t + "\n")
 		}
+		for _, sg := range f.Signals {
+			if sg.Note != "" {
+				fmt.Fprintf(&head, "%s: %s.\n\n", findings.Title(sg.Name), sg.Note)
+			}
+		}
+		if f.Gate.Line != "" {
+			head.WriteString(f.Gate.Line + "\n\n")
+		}
+		fmt.Fprintf(&head, "## Tested\n\n%s\n", f.Tested)
 	} else {
 		for _, c := range cols {
 			fmt.Fprintf(&head, "- **%s** — agent %s\n", c.Name, report.AgentLabel(c.Runs[0]))

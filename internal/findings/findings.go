@@ -494,6 +494,15 @@ func upperFirst(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+// Title is a signal or topic name as a heading: "cpu" is CPU, the rest
+// take a capital.
+func Title(name string) string {
+	if name == "cpu" {
+		return "CPU"
+	}
+	return upperFirst(name)
+}
+
 // tested identifies the two builds, then the workload both ran.
 func tested(in Input) string {
 	var b strings.Builder
@@ -1397,7 +1406,7 @@ func regexpSafe(s string) string {
 // notebook alike; the next steps are the brief's and stay out of it).
 func SectionMarkdown(sec Section) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "### %s\n\n", sec.Topic)
+	fmt.Fprintf(&b, "### %s\n\n", Title(sec.Topic))
 	if sec.Reading != "" {
 		fmt.Fprintf(&b, "%s\n\n", sec.Reading)
 	}
@@ -1438,7 +1447,11 @@ func SignalsTable(res *Result, cols []report.Column) string {
 			name = ""
 		}
 		last = s.Name
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | ±%.0f%% |\n", name, s.Metric, s.A, s.B, s.Delta, s.Threshold)
+		delta := s.Delta
+		if s.Kind == "regression" {
+			delta = "**" + delta + "**"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | ±%.0f%% |\n", name, s.Metric, s.A, s.B, delta, s.Threshold)
 	}
 	return b.String()
 }
@@ -1507,22 +1520,15 @@ func Markdown(res *Result, in Input) string {
 	} else {
 		p("# aoc A/B %s\n\n", in.Experiment)
 	}
-	for i, v := range res.Verdict {
-		if i == 0 {
-			p("**%s**\n\n", v)
-			continue
-		}
-		p("- %s\n", v)
-	}
-	if len(res.Verdict) > 1 {
-		p("\n")
+	if len(res.Verdict) > 0 {
+		p("**%s**\n\n", res.Verdict[0])
 	}
 	if t := SignalsTable(res, in.Cols); t != "" {
 		p("%s\n", t)
 	}
 	for _, s := range res.Signals {
 		if s.Note != "" {
-			p("%s: %s.\n\n", upperFirst(s.Name), s.Note)
+			p("%s: %s.\n\n", Title(s.Name), s.Note)
 		}
 	}
 	p("%s\n\n", res.Gate.Line)
@@ -1674,14 +1680,23 @@ func Movers(res *Result) []Mover {
 	add := func(fn, view, delta string) {
 		pt := ProfileType(view)
 		f := FlameFunc(fn)
-		if pt == "" || f == "" || seen[f] || len(out) >= 4 {
+		if pt == "" || f == "" || seen[f] || len(out) >= 3 {
 			return
 		}
 		seen[f] = true
 		out = append(out, Mover{Function: prof.ShortFunc(fn), View: view, Delta: delta, ProfileType: pt, Focus: f})
 	}
+	// A mover whose file changed between the builds is the one worth a
+	// flame graph; unchanged code that moved is usually load, not the change.
 	for _, r := range res.Code {
-		add(r.Function, r.View, r.Delta)
+		if r.Change != "unchanged" {
+			add(r.Function, r.View, r.Delta)
+		}
+	}
+	for _, r := range res.Code {
+		if r.Change == "unchanged" {
+			add(r.Function, r.View, r.Delta)
+		}
 	}
 	if len(out) == 0 {
 		for _, d := range res.Profiles {
