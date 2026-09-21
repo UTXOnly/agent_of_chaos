@@ -36,13 +36,14 @@ var compareMetrics = []metric{
 	{"orphan continuation lines", func(r *Report) float64 { return float64(r.Delivery.Orphans) }, func(v float64) string { return fmtutil.Int(int64(v)) }, lower},
 	{"truncated", func(r *Report) float64 { return float64(r.Delivery.Truncated) }, func(v float64) string { return fmtutil.Int(int64(v)) }, lower},
 	{"generated /s", func(r *Report) float64 { return r.Throughput.GenRecordsPerSec }, fmtutil.Rate, neutral},
-	{"received logs /s", func(r *Report) float64 { return r.Throughput.RecvLogsPerSec }, fmtutil.Rate, neutral},
+	{"received logs /s", func(r *Report) float64 { return r.Throughput.RecvLogsPerSec }, fmtutil.Rate, higher},
 	{"received wire B/s", func(r *Report) float64 { return r.Throughput.RecvWireBytesPerSec }, func(v float64) string { return fmtutil.BytesF(v) + "/s" }, lower},
 	{"compression ratio", func(r *Report) float64 { return r.Throughput.CompressionRatio }, func(v float64) string { return fmt.Sprintf("%.2f×", v) }, higher},
 	{"e2e latency p50", func(r *Report) float64 { return r.Latency.EndToEnd.P50 }, secs, lower},
 	{"e2e latency p99", func(r *Report) float64 { return r.Latency.EndToEnd.P99 }, secs, lower},
 	{"e2e latency max", func(r *Report) float64 { return r.Latency.EndToEnd.Max }, secs, lower},
 	{"sender latency p99", func(r *Report) float64 { return r.Latency.Sender.P99 }, secs, lower},
+	{"pipeline utilization (busiest component)", BusiestComponent, func(v float64) string { return fmt.Sprintf("%.2f", v) }, lower},
 	{"agent container CPU avg", func(r *Report) float64 { return r.Resources.ContainerCPUAvg }, func(v float64) string { return fmt.Sprintf("%.1f%%", v) }, lower},
 	{"agent container CPU max", func(r *Report) float64 { return r.Resources.ContainerCPUMax }, func(v float64) string { return fmt.Sprintf("%.1f%%", v) }, lower},
 	{"agent container mem avg", func(r *Report) float64 { return float64(r.Resources.ContainerMemAvg) }, func(v float64) string { return fmtutil.BytesF(v) }, lower},
@@ -64,17 +65,54 @@ var compareMetrics = []metric{
 	{"requests /s", func(r *Report) float64 { return r.Throughput.RequestsPerSec }, func(v float64) string { return fmt.Sprintf("%.1f", v) }, neutral},
 }
 
-// headlineMetrics are the rows of the short verdict (aoc ab).
+// headlineMetrics are the rows the brief answers with: the delivery gate,
+// then one row per signal of the logs pipeline (throughput, saturation,
+// cpu, memory). Everything else lives in compare.md only.
 var headlineMetrics = []string{
-	"delivery ratio", "lost / missing", "duplicates", "out of order", "orphan continuation lines",
-	"e2e latency p50", "e2e latency p99", "received wire B/s", "compression ratio",
-	"agent container CPU avg", "core agent process CPU avg", "CPU seconds per 1M logs",
-	"agent container mem max", "agent container anon mem max", "core agent RSS max", "core agent Go heap in use", "core agent goroutines",
-	"tags per log", "tag bytes per log", "agent log errors", "agent log warnings",
+	"delivery ratio", "lost / missing", "duplicates", "out of order", "orphan continuation lines", "truncated",
+	"received logs /s",
+	"pipeline utilization (busiest component)",
+	"core agent process CPU avg", "CPU seconds per 1M logs",
+	"core agent RSS max", "agent container anon mem avg", "core agent Go heap in use",
 }
 
 // HeadlineMetrics lists the verdict rows, in order.
 func HeadlineMetrics() []string { return append([]string(nil), headlineMetrics...) }
+
+// BusiestComponent is the highest utilization ratio the agent reports over
+// the logs pipeline's components: the pipeline is as busy as its busiest
+// stage, and a stage near 1.0 is the bottleneck.
+func BusiestComponent(r *Report) float64 {
+	max := 0.0
+	for _, t := range r.Telemetry {
+		if t.Name == "logs_component_utilization__ratio" {
+			if v := teleAvg(t); v > max {
+				max = v
+			}
+		}
+	}
+	return max
+}
+
+// teleAvg is a gauge's average over the window, or its last value for runs
+// recorded before the intake averaged gauges.
+func teleAvg(t Telemetry) float64 {
+	if t.Mean != 0 {
+		return t.Mean
+	}
+	return t.Last
+}
+
+// TeleAvg is teleAvg for a named series ("" labels matches the unlabelled
+// series; otherwise a substring of the label set).
+func TeleAvg(r *Report, name, labels string) float64 {
+	for _, t := range r.Telemetry {
+		if t.Name == name && (labels == "" && t.Labels == "" || labels != "" && strings.Contains(t.Labels, labels)) {
+			return teleAvg(t)
+		}
+	}
+	return 0
+}
 
 // Tele is the last value of an agent telemetry series (name, and a
 // substring of its labels; "" matches the unlabelled series). 0 when absent.
@@ -516,8 +554,8 @@ func delta(a, b float64, s sense) string {
 		return "="
 	}
 	if a == 0 || math.IsInf(b/a, 0) || math.IsNaN(b/a) {
-		if s == lower && b > 0 {
-			return fmt.Sprintf("+%s ⚠️", fmtutil.Float(b, 0))
+		if b > 0 {
+			return "+" + fmtutil.Float(b, 0)
 		}
 		return "n/a"
 	}
@@ -525,19 +563,22 @@ func delta(a, b float64, s sense) string {
 	if math.Abs(pct) < 0.5 {
 		return "≈"
 	}
-	out := fmt.Sprintf("%+.1f%%", pct)
-	switch s {
-	case neutral:
-		return out
-	case higher:
-		if pct > 0 {
-			return out + " ✅"
-		}
-		return out + " ⚠️"
-	default:
-		if pct < 0 {
-			return out + " ✅"
-		}
-		return out + " ⚠️"
+	return fmt.Sprintf("%+.1f%%", pct)
+}
+
+// Kind says how a change reads for a metric's sense: a move of at least
+// threshold percent in the worse direction is a regression, in the better
+// direction an improvement. Neutral metrics are always flat.
+func Kind(sense string, pct, threshold float64) string {
+	if math.IsNaN(pct) || math.Abs(pct) < threshold || sense == "neutral" {
+		return "flat"
 	}
+	worse := pct > 0
+	if sense == "higher" {
+		worse = pct < 0
+	}
+	if worse {
+		return "regression"
+	}
+	return "improvement"
 }

@@ -132,10 +132,13 @@ func Pct(r float64) string {
 	switch {
 	case p == 0:
 		return "0%"
-	case p >= 99.9999 && p < 100:
-		return fmt.Sprintf("%.5f%%", p)
 	case p >= 99.9 && p < 100:
-		return fmt.Sprintf("%.4f%%", p)
+		// Enough decimals to show a small loss, without trailing zeros.
+		s := strings.TrimRight(fmt.Sprintf("%.5f", p), "0")
+		if len(s)-strings.Index(s, ".") <= 2 {
+			s = fmt.Sprintf("%.2f", p)
+		}
+		return s + "%"
 	case p >= 10:
 		return fmt.Sprintf("%.2f%%", p)
 	case p >= 0.01:

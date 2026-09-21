@@ -1,198 +1,52 @@
-# aoc.yaml — the A/B test this checkout runs.
+# aoc.yaml — the settings every A/B test on this checkout runs with.
 #
-# Two Datadog Agents get the same workload, alongside each other (each in
-# its own stack, against its own fake logs intake): side `a` is the control
-# (the latest public release by default), side `b` the candidate (a
-# development build). The harness then
-# writes an investigation brief, results/<name>/findings.md: which headline
-# metrics regressed, and the evidence that says why — memory by process and
-# by cgroup, the agent's own CPU/heap profiles diffed function by function,
-# its telemetry, its log — followed by the improvements and the full table.
-# The same brief leads the Datadog notebook, and every aoc.* metric, event
-# and agent metric/profile is tagged experiment:<name> variant:<side>.
+# What a given test is about comes from the command line:
 #
-# Like datadog.yaml, every setting is listed here with its default; uncomment
-# what you want to change.
+#   aoc ab --b IMAGE --workload NAME --focus "the question this answers"
 #
-#   aoc ab                    # run this file
-#   aoc ab --plan             # validate it and print what would run
-#   aoc ab --config x.yaml    # another test
-#   aoc ab --only b           # rebuilt the dev image? re-run b, reuse a's results
-#   aoc ab --compare-only     # re-render findings.md, compare.md and the notebook from disk
-#   aoc conclude --results results/<name> "what it turned out to be"
-#
-# Unknown keys are errors, so typos surface before a run, not after it.
+# See aoc.example.yaml for every setting with its default and what it does.
 
-##################################
-## The test
-##################################
-
-## @param name - string - optional - default: ab-<profile name>
-## The experiment's name: results land in results/<name>/, everything in
-## Datadog carries experiment:<name>, and run names are <name>-<side>.
-#
-# name: my-feature
-
-## @param profile - string or mapping - required
-## The workload both sides get: an experiment profile (see profiles/README.md
-## and `aoc profiles`), or the profile written inline, e.g.
-##
-##   profile:
-##     duration: 3m
-##     warmup: 20s
-##     generators:
-##       gen-plain: { streams: 8, rate: 5000 }
-##       gen-json:  { streams: 8, rate: 5000 }
-##     faults:
-##       - { at: 60s, set: { error_rate: 0.5, error_status: 503 } }
-##       - { at: 90s, clear: true }
-#
-profile: profiles/baseline.yaml
-
-## @param duration - duration - optional - default: the profile's
-## @param warmup   - duration - optional - default: the profile's
-## @param drain    - duration - optional - default: the profile's
-## Override the profile's measured window, the settling time after the
-## generators start, and the wait for the pipeline to flush after they stop.
-##
-## The agent profiles itself once a minute (DD_INTERNAL_PROFILING_PERIOD) and
-## the brief is built from the profiles that fall inside the window, so the
-## window should span several periods: 10 minutes gives nine or ten per
-## side, enough to average out GC and rotation noise. `aoc ab --duration 2m`
-## is a quick smoke of a config (one or two periods).
-#
-duration: 10m
-# warmup: 20s
-# drain: 45s
-
-## @param threshold - number - optional - default: 10
-## Percent change on a headline metric (b vs a) that counts as a finding.
-## Below it a change is reported in the table but not investigated. Records
-## lost, duplicated or reordered are always findings.
-#
-# threshold: 10
-
-## @param runs - integer - optional - default: 1
-## Rounds per side. With more than one round, tables and the verdict use the
-## median of each side's runs, and the notebook overlays every run.
-#
-# runs: 1
-
-## @param parallel - boolean - optional - default: true
-## Run both sides of a round at the same time, each in its own compose
-## project (aoc-a, aoc-b: separate containers, volumes and host ports
-## 8282/10516 and 8283/10517), so a round takes one window instead of two
-## and both agents see the same moment of the host. They do share the
-## host's CPU and disk, so keep the workload well inside what the machine
-## can do twice over. `false` (or `aoc ab --sequential`) runs them one
-## after the other — a, b, a, b, … — in the single `aoc` project.
-#
-# parallel: true
-
-## @param pause - duration - optional - default: 10s
-## Idle time between two rounds (or, sequentially, two runs), for the host
-## to settle.
-#
-# pause: 10s
-
-##################################
-## The agents
-##################################
-
-## Each side is an image plus, optionally, agent settings for that side only.
-## Both sides get the profile's `agent.env` and the shared `env` below.
-
+## The control: a moving tag, re-pulled before every run, so it really is
+## the latest 7.x release.
 a:
-  ## @param image - string - optional - default: datadog/agent:7
-  ## The control. datadog/agent:7 is a moving tag: with `pull: always` it is
-  ## whatever the newest 7.x release is when the run starts, and the report
-  ## records the version and digest that actually ran. Pin a version
-  ## (datadog/agent:7.70.0) for a fixed control.
-  #
   image: datadog/agent:7
 
-  ## @param name - string - optional - default: a
-  ## The side's label in tables, charts and the variant:<name> tag.
-  #
-  # name: release
+## The workload both sides get when --workload does not name one.
+profile: profiles/baseline.yaml
 
-  ## @param pull - string - optional - default: always
-  ## always | missing | never. `always` re-pulls before every run, so a moving
-  ## tag really is the latest; `never` for an image you built locally.
-  #
-  # pull: always
+## The measured window, whatever the workload says: ten minutes gives the
+## profiler nine or ten periods per side, enough to average out GC and
+## rotation noise. --duration 2m is a smoke.
+duration: 10m
 
-  ## @param env - map - optional
-  ## Agent settings (any DD_*) for this side only.
-  #
-  # env:
-  #   DD_LOG_LEVEL: info
-
-b:
-  ## @param image - string - required
-  ## The candidate: a CI build of a branch (datadog/agent-dev:<branch>-py3),
-  ## the tip of master (datadog/agent-dev:master-py3), or something you built
-  ## (then `pull: never`).
-  #
-  image: datadog/agent-dev:master-py3
-
-  # name: candidate
-  # pull: always
-
-  ## Settings only the candidate gets — typically the feature under test.
-  #
-  # env:
-  #   DD_LOGS_CONFIG_TAG_FILTERS: '{"exclude":["env:*","dirname:*","filename:*"]}'
-
-## @param env - map - optional
-## Agent settings applied to both sides, on top of the profile's agent.env.
-#
+## Agent settings both sides get. Per-test flags go in --b-env / --env.
+env: {}
 # env:
-#   DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: "false"
-#   DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
+#   DD_INTERNAL_PROFILING_PERIOD: 60s
 
-##################################
-## The code
-##################################
+## Rounds per side: tables and the verdict take the median, the notebook
+## overlays each round.
+runs: 2
 
-## @param source - string - optional - default: $DATADOG_AGENT_SRC, else ../datadog-agent
-## A checkout of the agent's repository. The profiler tags every upload
-## with the build's commit, so with a checkout that has both commits the
-## brief can say, for each function the profiles flagged, whether its file
-## changed between the two builds — and the investigation can open it
-## (`git -C <source> show <commit>:<file>`).
-#
+## Percent change on a headline metric that counts as a finding, per
+## signal. --threshold sets all four at once.
+thresholds:
+  throughput: 5
+  saturation: 10
+  cpu: 5
+  memory: 5
+
+## A checkout of the agent's repository, for the brief's code section.
+## Default: $DATADOG_AGENT_SRC, else ../datadog-agent.
 # source: ~/src/datadog-agent
 
-##################################
-## Output
-##################################
+## Packages under test: the brief puts profile movers there first.
+## Default: the logs packages (comp/logs*, pkg/logs). --code narrows it.
+# code: [pkg/logs/sender]
 
-## @param results - string - optional - default: results
-## Results root. For the pair the test writes results/<name>/findings.md
-## (the brief: regressions, evidence, improvements, the headline), findings.json,
-## compare.md (every metric, per-process table, telemetry counters), ab.json
-## (identities, windows, findings, file paths — for tooling), notebook.json
-## and a copy of this file; per run, results/<name>/<side>[-<round>]/ with
-## report.md, report.json, timeseries.csv, profiles/ (the agent's pprof
-## uploads over the window), agent.log and agent-status.txt.
-#
-# results: results
+## Results root; the brief lands in <results>/<experiment>/findings.md.
+results: results
 
-## @param notebook - boolean - optional - default: true when DD_APP_KEY is set
-## Create the A/B notebook in Datadog: the brief first (verdict, one cell per
-## regression with its evidence, the profile diffs and links), the
-## profiler's comparison view embedded — a's flame graph beside b's for CPU,
-## heap and allocations, then one per mover focused on that function — and
-## the charts with both agents overlaid, the full table last. notebook.json is
-## always written and can be handed to the Datadog MCP's
-## create_datadog_notebook instead.
-#
+## Create the A/B notebook in Datadog. Default: true when DD_APP_KEY is
+## set; notebook.json is always written.
 # notebook: true
-
-## @param compose - list of strings - optional
-## Extra compose files stacked on docker-compose.yml for every run, e.g. the
-## offline overlay when there is no Datadog account.
-#
-# compose:
-#   - docker-compose.offline.yml

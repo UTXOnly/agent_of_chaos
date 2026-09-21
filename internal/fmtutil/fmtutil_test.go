@@ -31,7 +31,7 @@ func TestFormatting(t *testing.T) {
 	if Duration(90*time.Second) != "1m30s" || Duration(250*time.Millisecond) != "250ms" {
 		t.Errorf("Duration: %s %s", Duration(90*time.Second), Duration(250*time.Millisecond))
 	}
-	if Pct(1) != "100.00%" || Pct(0.99999) != "99.9990%" || Pct(0) != "0%" {
+	if Pct(1) != "100.00%" || Pct(0.99999) != "99.999%" || Pct(0) != "0%" {
 		t.Errorf("Pct: %s %s %s", Pct(1), Pct(0.99999), Pct(0))
 	}
 }

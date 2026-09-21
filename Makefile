@@ -16,8 +16,9 @@ vet:
 image: ## build the docker image used by the compose files
 	docker compose build
 
-ab: build ## the A/B test in aoc.yaml: latest release vs the dev image (needs docker)
-	./bin/aoc ab
+ab: build ## A/B the release against B=<image> (needs docker): make ab B=datadog/agent-dev:my-branch-py3 WORKLOAD=baseline FOCUS="what changed"
+	@test -n "$(B)" || { echo "make ab needs B=<image under test>"; exit 2; }
+	./bin/aoc ab --b "$(B)" $(if $(WORKLOAD),--workload "$(WORKLOAD)") $(if $(FOCUS),--focus "$(FOCUS)")
 
 run-baseline: build ## the smallest end-to-end experiment (needs docker)
 	./bin/aoc run --profile profiles/baseline.yaml --name baseline

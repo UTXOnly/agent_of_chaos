@@ -36,24 +36,37 @@ One binary, `aoc`, plays every role. Logs never leave the host.
 cp .env.example .env          # DD_API_KEY (required), DD_APP_KEY (for notebooks), DD_SUBDOMAIN; the CLI reads it too
 make build                    # ./bin/aoc
 
-$EDITOR aoc.yaml              # b.image: the development image to test
-./bin/aoc ab                  # a = datadog/agent:7 (latest), b = your image, same workload, 10 min each
-cat results/ab-baseline/findings.md
+./bin/aoc ab --b datadog/agent-dev:my-branch-py3 \
+  --workload baseline \
+  --focus "does the new sender batching cost CPU?" \
+  --code pkg/logs/sender \
+  --b-env DD_LOGS_CONFIG_TAG_FILTERS='{"exclude":["dirname:*"]}'
+
+cat results/my-branch-py3-baseline/findings.md            # the brief
+./bin/aoc conclude --results results/my-branch-py3-baseline "what it turned out to be"
 ```
 
-[aoc.yaml](aoc.yaml) is the test run's config, in the spirit of
-`datadog.yaml`: every setting is listed with its default, uncomment what you
-change. The minimum is the workload and the two images:
+One command line is the test: the build under test (`--b`), the workload
+(`--workload`, a name in [profiles/](profiles/) or a path) and the question
+it answers (`--focus`, which opens the brief and names the notebook). The
+control is `datadog/agent:7`, the latest release. The experiment is named
+after the image tag and the workload unless `--name` says otherwise.
+
+[aoc.yaml](aoc.yaml) holds only what every test here shares — the control
+image, the agent settings both sides get, the thresholds, the default
+workload, where results go. [aoc.example.yaml](aoc.example.yaml) documents
+every setting with its default, in the spirit of `datadog.yaml`.
 
 ```yaml
-profile: profiles/baseline.yaml      # or the profile written inline
-duration: 10m                        # several profiling periods per side
 a:
   image: datadog/agent:7             # the control: re-pulled every run, so it is the latest 7.x
-b:
-  image: datadog/agent-dev:my-branch-py3
-  env:                               # settings only the candidate gets, e.g. the feature under test
-    DD_LOGS_CONFIG_TAG_FILTERS: '{"exclude":["env:*","dirname:*"]}'
+profile: profiles/baseline.yaml      # the workload when --workload names none
+runs: 2                              # rounds per side; tables take the median
+thresholds:                          # percent change that counts as a finding
+  throughput: 5
+  saturation: 10
+  cpu: 5
+  memory: 5
 ```
 
 `aoc ab` runs the profile against `a` and `b` at the same time, each in its
@@ -63,12 +76,12 @@ the other; `runs: 2` repeats the round and takes medians), and writes an
 
 | file | what |
 |---|---|
-| `findings.md` | **the brief.** What we tested (images, versions, commits, what only one side had, the workload); what differed (regressions beyond `threshold`, 10 % by default, improvements, and only the rows that moved); where — per regressed topic a one-sentence reading derived from the numbers ("the container grew through page cache, not process memory"), the tables that explain it (anon vs page cache, processes that moved, the agent's own CPU/heap/allocation profiles diffed **function by function** with each mover's `file:line`), pipeline utilization, retries, the log's repeated errors; the profiles; and **the code** — each mover located in the agent's source at the tested commit, with whether its file changed between the two builds (given a checkout, `source:`). Your conclusion goes on top once you have one |
+| `findings.md` | **the brief.** The verdict line; the signals table — throughput, saturation, CPU, memory, each against its threshold; the delivery gate; what we tested; one section per regressed signal with a one-sentence reading and the tables that name the cause (memory by process and cgroup, utilization by component, the agent's CPU/heap/allocation profiles diffed **function by function**, packages under test first); the profiles; and **the code** — each mover located in the agent's source at the tested commit, with whether its file changed between the two builds (given a checkout, `source:`). Your conclusion goes on top once you have one |
 | `compare.md` | every metric side by side, the per-process table, the agent's telemetry counters |
 | `ab.json`, `findings.json` | the same for tooling: images, digests, versions, windows, findings, file paths, notebook URL |
-| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the Datadog notebook in the same order — tested, differed, conclusion, where, profiles and code — with the profiler's **comparison view embedded** (same-origin iframes: `a`'s flame graph beside `b`'s for CPU, heap and allocations, then one per mover focused on that function) and only the charts that bear on what moved, **both agents overlaid** (the earlier run `timeshift`ed onto the later one) |
+| `notebook.json` (+ the notebook itself when `DD_APP_KEY` is set) | the same brief, then the profiler's **comparison view embedded** (same-origin iframes: `a`'s CPU flame graph beside `b`'s, then one per mover focused on that function) and four charts, one per signal, **both agents overlaid** (the earlier run `timeshift`ed onto the later one) |
 | `a/`, `b/` (`a-2/`, `b-2/`, …) | a full [run directory](#what-a-run-writes) per side and round, including `profiles/` — the agent's pprof uploads over the window |
-| `aoc.yaml` | the config that ran |
+| `aoc.yaml` | the test as it ran, settings and flags together: `aoc ab --config results/<name>/aoc.yaml` repeats it |
 
 The profiles are the point: the agent's continuous profiler is on, the
 trace-agent's upload proxy is pointed at the intake, and the intake keeps a
@@ -85,13 +98,27 @@ the verdict, and `aoc conclude --results results/<name> "…"` records what
 the investigation found next to it.
 
 ```bash
-aoc ab --plan                 # validate aoc.yaml, print what would run
-aoc ab --duration 2m          # a quick smoke of the config
-aoc ab --only b               # rebuilt the dev image: re-run b, reuse a's results
-aoc ab --compare-only         # re-render the brief / the notebook from what is on disk
-aoc ab --config tests/rotation.yaml --runs 2 --threshold 5
-aoc conclude --results results/rotation --verdict pass "…"   # → conclusion.md, an event, the notebook's first cell
+aoc ab --b IMAGE --plan                     # validate and print what would run
+aoc ab --b IMAGE --workload high-throughput # a workload by name, or a path
+aoc ab --b IMAGE --duration 2m              # a quick smoke of the setup
+aoc ab --b IMAGE --watch "tag bytes per log" --threshold 5
+aoc ab --only b                             # rebuilt the dev image: re-run b, reuse a's results
+aoc ab --config results/<name>/aoc.yaml --compare-only   # re-render the brief / the notebook from disk
+aoc conclude --results results/<name> --verdict pass "…"  # → conclusion.md, an event, the notebook's first cell
 ```
+
+| flag | what |
+|---|---|
+| `--b IMAGE` | the build under test (required, unless the config pins `b.image`) |
+| `--a IMAGE` | the control (default `datadog/agent:7`, or the config's `a.image`) |
+| `--workload NAME\|PATH` | the workload both sides run: a name in `profiles/`, or a path |
+| `--focus TEXT` | the question this test answers: it opens the brief and names the notebook |
+| `--code PKG` | a package under test; the brief shows movers there first (repeatable, commas allowed) |
+| `--watch METRIC` | a `compare.md` metric to promote to the headline (repeatable) |
+| `--b-env K=V` | a setting only the build under test gets — the feature flag (repeatable) |
+| `--env K=V` | a setting both sides get (repeatable) |
+| `--name`, `--runs`, `--duration`, `--threshold` | the experiment's name, rounds per side, the measured window, the percent that counts as a finding |
+| `--sequential`, `--only a\|b`, `--plan`, `--compare-only`, `--config` | run the sides one after the other, one side, validate only, re-render from disk, another settings file |
 
 The terminal ends with what differed and the one-sentence reading per
 regression; the brief has the rest. From a 2½-minute smoke of the log
