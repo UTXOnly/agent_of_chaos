@@ -1,0 +1,30 @@
+name: tag-heavy-fleet
+description: Tag exclusion under load — 15 application containers, one stdout stream each at 500 lines/s (docker log driver), every line carrying ~40 tags (container_*/image tags, ~20 docker labels, ~15 host tags). Compare with and without DD_LOGS_CONFIG_TAG_FILTERS; watch tag bytes per log, CPU and allocations in the processor.
+duration: 3m
+warmup: 30s
+drain: 60s
+compose: [docker-compose.tag-heavy-fleet.yml]
+agent:
+  env:
+    # Every docker label on the generators becomes a tag on their logs.
+    DD_DOCKER_LABELS_AS_TAGS: '{"app":"app","team":"team","tier":"tier","owner":"owner","component":"component","release":"release","build_id":"build_id","git_sha":"git_sha","region":"region","zone":"zone","cluster":"cluster","namespace":"namespace","deployment":"deployment","pod_template_hash":"pod_template_hash","language":"language","framework":"framework","cost_center":"cost_center","sla":"sla","pci":"pci","canary":"canary","traffic_class":"traffic_class"}'
+    # Host-level tags on top of the harness's run:/experiment:/variant: tags.
+    DD_EXTRA_TAGS: "project:agent-of-chaos availability-zone:local-a cloud_provider:none instance-type:laptop kernel:docker-desktop vcpu:8 os:linux arch:arm64 fleet:tag-heavy datacenter:lab rack:r1 image_scan:clean compliance:none maintainer:platform"
+generators:
+  gen-plain: { enabled: false }
+  gen-json:  { enabled: false }
+  gen-app-01: &app { streams: 1, rate: 500, multiline-rate: 0 }
+  gen-app-02: *app
+  gen-app-03: *app
+  gen-app-04: *app
+  gen-app-05: *app
+  gen-app-06: *app
+  gen-app-07: *app
+  gen-app-08: *app
+  gen-app-09: *app
+  gen-app-10: *app
+  gen-app-11: *app
+  gen-app-12: *app
+  gen-app-13: *app
+  gen-app-14: *app
+  gen-app-15: *app
