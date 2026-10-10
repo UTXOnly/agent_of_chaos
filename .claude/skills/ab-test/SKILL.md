@@ -35,6 +35,7 @@ command line, run it, and read the brief.
 | `--code PKG` | the package they touched, repeatable. Default: `pkg/logs`, `comp/logs`, `comp/logs-library` |
 | `--b-env K=V` | the feature flag under test: b only |
 | `--env K=V` | an agent setting both sides need for the test to be fair |
+| `--fault K=V` | when they want the comparison under a fault: `latency_ms=500`, `drop_rate=0.05`, `error_rate=0.2,error_status=429`, `outage=true`, `read_bps=500000`. Both sides get it, for the whole window. The `experiment` skill maps situations to faults |
 | `--watch METRIC` | a `compare.md` metric they asked about (`e2e latency p99`, `tag bytes per log`, `received wire B/s`) back on the headline |
 | `--name NAME` | only when they name the run; the default is `<b tag>-<workload>` |
 

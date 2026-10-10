@@ -25,7 +25,7 @@ import (
 type Config struct {
 	Addr    string // HTTP listen address, e.g. ":8282"
 	TCPAddr string // TCP (legacy) listen address, "" disables
-	Name    string // run label shown in the UI and report
+	Name    string // run label: the run:<name> tag and the report name
 
 	// APIKey, when set, is required in DD-API-KEY (403 otherwise), like the
 	// real intake. Empty accepts any key.

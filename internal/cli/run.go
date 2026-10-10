@@ -19,6 +19,7 @@ import (
 
 	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
 	"github.com/UTXOnly/agent_of_chaos/internal/gen"
+	"github.com/UTXOnly/agent_of_chaos/internal/intake"
 	"github.com/UTXOnly/agent_of_chaos/internal/notebook"
 	"github.com/UTXOnly/agent_of_chaos/internal/prof"
 	"github.com/UTXOnly/agent_of_chaos/internal/report"
@@ -52,6 +53,44 @@ type FaultStep struct {
 	At    gen.Duration   `yaml:"at"`
 	Set   map[string]any `yaml:"set"`
 	Clear bool           `yaml:"clear"`
+}
+
+// parseFaults turns --fault K=V values into the intake's fault fields
+// (latency_ms=300, drop_rate=0.05, outage=true), rejecting unknown fields
+// and out-of-range values before anything starts.
+func parseFaults(list []string) (map[string]any, error) {
+	kv, err := parseKV(list)
+	if err != nil || len(kv) == 0 {
+		return nil, err
+	}
+	set := make(map[string]any, len(kv))
+	for k, v := range kv {
+		var val any
+		if json.Unmarshal([]byte(v), &val) != nil {
+			val = v // free text, e.g. note=…
+		}
+		set[k] = val
+	}
+	return set, checkFaults(set)
+}
+
+func checkFaults(set map[string]any) error {
+	body, _ := json.Marshal(set)
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	var f intake.Faults
+	if err := dec.Decode(&f); err != nil {
+		return fmt.Errorf("%v (fields: latency_ms, jitter_ms, error_rate, error_status, drop_rate, outage, read_bps, note)", err)
+	}
+	return f.Validate()
+}
+
+// describeFaults is the one-line summary of a --fault set.
+func describeFaults(set map[string]any) string {
+	body, _ := json.Marshal(set)
+	var f intake.Faults
+	_ = json.Unmarshal(body, &f)
+	return f.String()
 }
 
 func loadProfile(path string) (*Profile, error) {
@@ -606,6 +645,7 @@ func runRun(args []string) int {
 			"plus the agent's status and logs into the results directory.\n"+
 			"To test two agent images against each other, see `aoc ab`.",
 		"  aoc run --profile profiles/baseline.yaml --name baseline\n"+
+			"  aoc run --profile profiles/baseline.yaml --fault latency_ms=500,jitter_ms=200 --name slow-intake\n"+
 			"  aoc run --profile profiles/baseline.yaml --agent-image datadog/agent-dev:my-build --name candidate\n"+
 			"  aoc compare results/baseline results/candidate")
 	profilePath := fs.Str("profile", "", "experiment profile (YAML), see profiles/README.md")
@@ -621,6 +661,7 @@ func runRun(args []string) int {
 	noBuild := fs.Bool("no-build", false, "do not rebuild the aoc image")
 	mkNotebook := fs.Bool("notebook", os.Getenv("DD_APP_KEY") != "", "create a Datadog notebook for the run (default: when DD_APP_KEY is set; notebook.json is always written)")
 	ddSite := fs.Str("dd-site", envOr("DD_SITE", "datadoghq.com"), "Datadog site for the notebook (env DD_SITE)")
+	fault := fs.list("fault", true, "an intake fault for the whole window, e.g. latency_ms=300 or drop_rate=0.05; replaces the profile's fault timeline; repeatable, commas allowed")
 	if !fs.parse(args) {
 		return 2
 	}
@@ -639,6 +680,13 @@ func runRun(args []string) int {
 	}
 	if *duration > 0 {
 		p.Duration = gen.Duration(*duration)
+	}
+	faults, err := parseFaults(fault.vals)
+	if err != nil {
+		return fail("run: --fault: %v", err)
+	}
+	if faults != nil {
+		p.Faults = []FaultStep{{Set: faults}}
 	}
 	img := *agentImage
 	if img == "" {
