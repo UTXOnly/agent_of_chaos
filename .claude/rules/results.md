@@ -5,7 +5,9 @@ paths:
 
 # Reading results without reading everything
 
-A results directory is large; the brief is small. Order of preference:
+A results directory is large; the brief is small. A single `aoc run` has
+no brief: read its `report.md` (delivery first) and use the `jq` lines in
+5. For an `aoc ab`, in order of preference:
 
 1. `results/<name>/findings.md` — the whole story (the verdict, the
    signals table, the gate, what was tested, a section per regressed

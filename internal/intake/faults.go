@@ -27,7 +27,7 @@ type Faults struct {
 	// ReadBps throttles how fast request bodies are read (bytes/s); 0 = off.
 	// Models a saturated uplink: the agent's sends take longer and back up.
 	ReadBps int64 `json:"read_bps"`
-	// Note is free text shown in the UI and report ("simulating region outage").
+	// Note is free text shown in events and the report ("simulating region outage").
 	Note string `json:"note,omitempty"`
 }
 

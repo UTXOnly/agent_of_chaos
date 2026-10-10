@@ -31,7 +31,7 @@ func copyMap(m map[string]int64) map[string]int64 {
 
 // buildReport assembles the report for the window since the last reset.
 // withGaps walks each stream's bitset to list missing ranges (costly for
-// very long streams, so the 1 Hz UI snapshot skips it).
+// very long streams, so the periodic metric and status snapshots skip it).
 func (s *Server) buildReport(withGaps bool) *report.Report {
 	now := time.Now()
 	st := s.stats

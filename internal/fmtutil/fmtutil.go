@@ -1,5 +1,5 @@
 // Package fmtutil has the small number/size/duration formatters shared by the
-// CLI status lines, the report renderer and the web UI's server side.
+// CLI status lines and the report renderer.
 package fmtutil
 
 import (

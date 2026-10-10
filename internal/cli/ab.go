@@ -57,6 +57,7 @@ type ABConfig struct {
 	Code       []string           `yaml:"code,omitempty"`       // packages under test, e.g. pkg/logs/sender
 	Watch      []string           `yaml:"watch,omitempty"`      // extra compare.md metrics promoted to the headline
 	Thresholds map[string]float64 `yaml:"thresholds,omitempty"` // percent per signal: throughput, saturation, cpu, memory
+	Faults     map[string]any     `yaml:"faults,omitempty"`     // intake faults for the whole window, both sides; replaces the workload's timeline
 }
 
 // Variant is one side of the test: an image and what applies to it only.
@@ -205,6 +206,9 @@ func (c *ABConfig) validate(path string) error {
 		return fmt.Errorf("no image to test: pass --b IMAGE, or set b.image in %s", path)
 	case c.Profile.Path == "" && c.Profile.Inline == nil:
 		return fmt.Errorf("no workload: pass --workload NAME, or set profile in %s", path)
+	}
+	if err := checkFaults(c.Faults); len(c.Faults) > 0 && err != nil {
+		return fmt.Errorf("faults in %s: %w", path, err)
 	}
 	return nil
 }
@@ -365,6 +369,9 @@ func (c *ABConfig) workload() (*Profile, []byte, error) {
 		p.Agent.Env = env
 	}
 	p.Compose = append(p.Compose, c.Compose...)
+	if len(c.Faults) > 0 {
+		p.Faults = []FaultStep{{Set: c.Faults}}
+	}
 	return p, src, nil
 }
 
@@ -449,6 +456,7 @@ func runAB(args []string) int {
 			"variant:<side>.",
 		"  aoc ab --b datadog/agent-dev:my-branch-py3 --workload baseline --focus \"is the new sender slower?\"\n"+
 			"  aoc ab --b datadog/agent-dev:my-branch-py3 --b-env DD_LOGS_CONFIG_TAG_FILTERS='{\"exclude\":[\"dirname:*\"]}'\n"+
+			"  aoc ab --b … --workload baseline --fault latency_ms=500,drop_rate=0.05   # both sides behind a slow, lossy intake\n"+
 			"  aoc ab --b … --plan             # validate and show what would run\n"+
 			"  aoc ab --only b                 # rebuilt the dev image? re-run b, reuse a's results\n"+
 			"  aoc ab --config results/<name>/aoc.yaml --compare-only   # re-render a finished test")
@@ -461,6 +469,7 @@ func runAB(args []string) int {
 	watch := fs.list("watch", true, "a compare.md metric to promote to the headline; repeatable, commas allowed")
 	bEnv := fs.list("b-env", false, "K=V only the image under test gets, e.g. the feature flag; repeatable")
 	env := fs.list("env", false, "K=V both sides get; repeatable")
+	fault := fs.list("fault", true, "an intake fault both sides get for the whole window, e.g. latency_ms=300 or drop_rate=0.05; replaces the workload's fault timeline; repeatable, commas allowed")
 	config := fs.Str("config", "aoc.yaml", "the settings to run with (the effective config is kept with the results)")
 	name := fs.Str("name", "", "experiment name (default: the config's `name`, else <b image tag>-<workload>)")
 	fs.section("The run")
@@ -513,6 +522,11 @@ func runAB(args []string) int {
 		return fail("ab: --b-env %v", err)
 	}
 	cfg.Env, cfg.B.Env = mergeEnv(cfg.Env, shared), mergeEnv(cfg.B.Env, candidate)
+	if len(fault.vals) > 0 {
+		if cfg.Faults, err = parseFaults(fault.vals); err != nil {
+			return fail("ab: --fault: %v", err)
+		}
+	}
 	if *runs > 0 {
 		cfg.Runs = *runs
 	}
@@ -586,6 +600,9 @@ func runAB(args []string) int {
 	}
 	if note := packagingNote(cfg.A, cfg.B); note != "" {
 		fmt.Fprintf(os.Stderr, "  %s\n", note)
+	}
+	if len(cfg.Faults) > 0 {
+		fmt.Fprintf(os.Stderr, "  faults: %s, both sides, whole window\n", describeFaults(cfg.Faults))
 	}
 	if cfg.Focus != "" {
 		fmt.Fprintf(os.Stderr, "  focus: %s\n", cfg.Focus)

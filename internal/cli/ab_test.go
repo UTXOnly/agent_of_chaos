@@ -338,3 +338,34 @@ b: { image: datadog/agent-dev:log-tag-filtering-9e35a50b-full, name: tagfilter, 
 		t.Errorf("plan: %+v", runs)
 	}
 }
+
+func TestParseFaults(t *testing.T) {
+	got, err := parseFaults([]string{"latency_ms=300", "drop_rate=0.05", "outage=false", "note=slow uplink"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"latency_ms": 300.0, "drop_rate": 0.05, "outage": false, "note": "slow uplink"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseFaults = %v, want %v", got, want)
+	}
+	if s := describeFaults(got); s != "drop 5%, latency 300ms (slow uplink)" {
+		t.Errorf("describeFaults = %q", s)
+	}
+	for _, bad := range []string{"latency=300", "drop_rate=2", "error_status=200", "latency_ms=-1"} {
+		if _, err := parseFaults([]string{bad}); err == nil {
+			t.Errorf("parseFaults(%q) accepted", bad)
+		}
+	}
+}
+
+func TestWorkloadFaultsReplaceTimeline(t *testing.T) {
+	cfg := ABConfig{Profile: workloadRef("intake-outage"), Faults: map[string]any{"latency_ms": 200.0}}
+	cfg.Profile.Path = filepath.Join("..", "..", cfg.Profile.Path)
+	p, _, err := cfg.workload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Faults) != 1 || p.Faults[0].At != 0 || p.Faults[0].Set["latency_ms"] != 200.0 {
+		t.Errorf("faults = %+v, want one step at 0 with latency_ms=200", p.Faults)
+	}
+}

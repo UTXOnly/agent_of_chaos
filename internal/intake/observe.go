@@ -123,7 +123,7 @@ func (a *agentObs) rebase() {
 	a.mu.Unlock()
 }
 
-// Status is the observer state for the UI.
+// ObserverStatus is what /harness/status reports about the observer.
 type ObserverStatus struct {
 	DockerContainer string    `json:"docker_container,omitempty"`
 	DockerOK        bool      `json:"docker_ok"`

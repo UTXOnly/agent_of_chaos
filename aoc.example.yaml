@@ -1,34 +1,11 @@
-# aoc.example.yaml — every aoc.yaml setting, with its default.
+# aoc.example.yaml: every aoc.yaml setting, with its default.
 #
-# Nobody runs this file: it is the reference. The shipped aoc.yaml holds
-# the settings this checkout tests with (the control image, the shared
-# agent env, the thresholds, the default workload); what a given test is
-# about comes from the command line:
-#
-#   aoc ab --b IMAGE --workload NAME --focus "the question this answers"
-#   aoc ab --b IMAGE --b-env DD_FEATURE=true       # the flag under test
-#   aoc ab --b IMAGE --code pkg/logs/sender        # where to look in the source
-#   aoc ab --plan                                  # validate and print what would run
-#   aoc ab --only b                                # rebuilt the dev image? re-run b, reuse a's
-#   aoc ab --config results/<name>/aoc.yaml --compare-only   # re-render a finished test
-#   aoc conclude --results results/<name> "what it turned out to be"
-#
-# Two Datadog Agents get the same workload, alongside each other (each in
-# its own stack, against its own fake logs intake): side `a` is the control
-# (the latest public release by default), side `b` the build under test.
-# The harness then writes an investigation brief,
-# results/<name>/findings.md: which headline metrics regressed, and the
-# evidence that says why — memory by process and by cgroup, the agent's own
-# CPU/heap profiles diffed function by function, its telemetry, its log —
-# followed by the improvements and the full table. The same brief leads the
-# Datadog notebook, and every aoc.* metric, event and agent metric/profile
-# is tagged experiment:<name> variant:<side>.
-#
-# The config a test ran with — the settings plus the flags — is written to
+# This file is a reference; nothing runs it. aoc.yaml holds the settings
+# every A/B test on this checkout shares. What a test is about (the image
+# under test, its feature flag, the workload, a fault) comes from the
+# `aoc ab` command line. The config a test ran with is written to
 # results/<name>/aoc.yaml, so `aoc ab --config results/<name>/aoc.yaml`
-# repeats it.
-#
-# Unknown keys are errors, so typos surface before a run, not after it.
+# repeats it. Unknown keys are errors.
 
 ##################################
 ## The test
@@ -193,6 +170,16 @@ a:
 # env:
 #   DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: "false"
 #   DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
+
+## @param faults - map - optional
+## Intake faults both sides get for the whole measured window, replacing
+## the workload's fault timeline. Fields: latency_ms, jitter_ms,
+## error_rate, error_status, drop_rate, outage, read_bps, note
+## (docs/reference.md#faults). `aoc ab --fault K=V` sets this.
+#
+# faults:
+#   latency_ms: 500
+#   drop_rate: 0.05
 
 ##################################
 ## The code

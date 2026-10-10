@@ -29,6 +29,11 @@ faults:                      # offsets from the start of the measured window
     clear: true
 ```
 
+`--fault` on the command line replaces the timeline with one fault for the
+whole window (`aoc run --profile profiles/baseline.yaml --fault
+drop_rate=0.05`). Use a timeline when the fault should start late, stop, or
+change. The fields are in [docs/reference.md](../docs/reference.md#faults).
+
 Run one:
 
 ```bash
