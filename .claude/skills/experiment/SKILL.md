@@ -1,0 +1,106 @@
+---
+name: experiment
+description: Turn "what happens to the agent when …" into an aoc run. Pick the workload (steady, max throughput, rotation storms, crashing writers, multiline floods, spikes, tag-heavy fleets), tune it with --set, add an intake fault with --fault (latency, dropped connections, 429/5xx, outage, slow uplink), run it, and report what the agent lost, duplicated or slowed down. Use when someone wants to put one agent through a situation; comparing two builds is the ab-test skill.
+---
+
+# Run a situation
+
+The user describes a situation. Produce one command, run it, report back.
+One image and "how does it behave when …" is `aoc run`. Two images, or
+"did my change make it better or worse under …", is `aoc ab`: build the
+same workload and fault flags, then follow `ab-test` from its step 2.
+
+## 1. Pick the workload
+
+`./bin/aoc profiles` lists each one with its numbers.
+
+| they say | `--profile` |
+|---|---|
+| nothing in particular, "normal load" | `baseline` |
+| max throughput, "how fast can it go", "push it" | `high-throughput` (`deterministic-bytes` for an A/B) |
+| log rotation, copytruncate, file races | `rotation-churn` |
+| apps crashing, files reopened | `chaos-restarts` |
+| stack traces, multiline | `multiline-heavy` |
+| huge lines, truncation, compression | `high-compression` |
+| traffic spike, burst, step change | `incident-scenario` |
+| container logs, lots of tags, docker labels | `tag-heavy-fleet` |
+| outage then recovery | `intake-outage` |
+| flaky network that recovers | `flaky-network` |
+
+## 2. Tune it
+
+Numbers they name go on the command line, never into the profile file:
+
+| they say | flag |
+|---|---|
+| a rate, "20k lines per second" | `--set rate=20000` (every generator) or `--set json.rate=20000` |
+| more or fewer files, streams, services | `--set streams=32` |
+| more containers | `--set app.replicas=30` (tag-heavy-fleet) |
+| bigger or smaller files, rotation size | `--set rotate-bytes=512KiB` |
+| more stack traces | `--set multiline-rate=0.3` |
+| long lines | `--set wide-line-rate=0.1 --set wide-line-bytes=16384` |
+| JSON instead of plain text | `--set format=json` |
+| stdout instead of files | `--set output=stdout` |
+| an agent setting | `--env DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION=true` |
+| a longer or shorter window | `--duration 5m` |
+
+Any `aoc generate` flag is a `--set` key (`aoc generate -h`); an unknown
+key fails before anything starts. `--plan` prints the resolved workload
+and the containers it would start: use it whenever you had to guess.
+
+## 3. Add the fault
+
+`--fault` applies for the whole window. Combine fields with commas.
+
+| they say | `--fault` |
+|---|---|
+| slow intake, high latency | `latency_ms=500,jitter_ms=200` |
+| timeouts | `latency_ms=15000` (above the agent's 10 s HTTP timeout) |
+| packet loss, flaky network, dropped connections | `drop_rate=0.05` |
+| rate limiting, 429s | `error_rate=0.2,error_status=429` |
+| 5xx, intake errors | `error_rate=0.3,error_status=503` |
+| intake down the whole time | `outage=true` |
+| bad requests, rejected payloads (the agent drops these: expect loss) | `error_rate=0.1,error_status=400` |
+| slow uplink, bandwidth cap | `read_bps=500000` |
+
+`drop_rate` drops whole requests, not packets; say so if they mean TCP
+loss. Faults that change during the window (on at 60 s, off at 90 s) need
+a `faults:` timeline: copy the closest profile to `profiles/<name>.yaml`,
+edit `faults:`, tell them the path. `intake-outage` and `flaky-network`
+already have one.
+
+## 4. Run it
+
+```bash
+make build
+mkdir -p results
+./bin/aoc run --profile <workload> [--set …] [--fault …] [--agent-image IMAGE] \
+  --name <short-name> > results/<short-name>.log 2>&1
+```
+
+`--agent-image` defaults to `datadog/agent:7`. Profiles run 3 to 5
+minutes; `--duration 2m` for a first look. Start it in the background with
+output to that file and wait for it to exit; do not poll and do not touch
+Docker meanwhile. Exit 0 is clean. Exit 3 means records were lost or
+duplicated, which is often the finding they were after, not an error.
+Anything else is a failed run: `tail -40` the log.
+
+## 5. Report
+
+Read `results/<name>/report.md`, delivery section first. Report:
+
+1. the workload, the settings changed and the fault, in one line;
+2. delivery: lost, duplicated, out of order, orphan continuation lines,
+   truncated;
+3. what the fault did: end-to-end latency p99 and max, retries and
+   responses by status, the agent's `sender_latency`;
+4. the cost: core agent CPU avg and RSS max;
+5. the notebook URL if one was created (the end of the log);
+6. the path of `results/<name>/profile.yaml`, which repeats the run.
+
+Single values: `jq '.delivery' results/<name>/report.json`,
+`jq '.latency' …`. Never read `report.json` or `timeseries.csv` whole.
+
+If records were lost under a 429/5xx/drop/latency fault, check the notes
+in `report.md` before calling it loss: the agent may still have been
+retrying when the drain ended, and a longer `drain:` tells the two apart.

@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/UTXOnly/agent_of_chaos/internal/agentbuild"
 	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
 	"github.com/UTXOnly/agent_of_chaos/internal/findings"
 	"github.com/UTXOnly/agent_of_chaos/internal/gen"
@@ -57,22 +58,30 @@ type ABConfig struct {
 	Code       []string           `yaml:"code,omitempty"`       // packages under test, e.g. pkg/logs/sender
 	Watch      []string           `yaml:"watch,omitempty"`      // extra compare.md metrics promoted to the headline
 	Thresholds map[string]float64 `yaml:"thresholds,omitempty"` // percent per signal: throughput, saturation, cpu, memory
+	Build      BuildConfig        `yaml:"build,omitempty"`      // how a side built from the checkout (a.src, b.src) is made
+	Set        []string           `yaml:"set,omitempty"`        // generator settings changed on the command line: rate=20000, json.streams=16
+	Faults     map[string]any     `yaml:"faults,omitempty"`     // intake faults for the whole window, both sides; replaces the workload's timeline
 }
 
 // Variant is one side of the test: an image and what applies to it only.
+// With Src, aoc builds the image from the checkout first (aoc build) and
+// Image is what it produced.
 type Variant struct {
 	Name  string            `yaml:"name"`
-	Image string            `yaml:"image"`
+	Image string            `yaml:"image,omitempty"`
+	Src   string            `yaml:"src,omitempty"` // a git ref in the checkout, or . for its working tree
 	Pull  string            `yaml:"pull"`
 	Env   map[string]string `yaml:"env,omitempty"`
 }
+
+// built reports whether this side comes out of the checkout.
+func (v Variant) built() bool { return v.Src != "" }
 
 // ProfileRef is `profile:` — the path of a profile file, or the profile
 // written inline.
 type ProfileRef struct {
 	Path   string
 	Inline *Profile
-	src    []byte
 }
 
 func (p *ProfileRef) UnmarshalYAML(n *yaml.Node) error {
@@ -85,7 +94,6 @@ func (p *ProfileRef) UnmarshalYAML(n *yaml.Node) error {
 			return err
 		}
 		p.Inline = &prof
-		p.src, _ = yaml.Marshal(n)
 		return nil
 	}
 	return errors.New("profile: expected a path or a mapping")
@@ -140,7 +148,7 @@ func loadABConfig(path string) (*ABConfig, error) {
 	if c.B.Name == "" {
 		c.B.Name = "b"
 	}
-	if c.A.Image == "" {
+	if c.A.Image == "" && c.A.Src == "" {
 		c.A.Image = defaultAImage
 	}
 	for _, v := range []*Variant{&c.A, &c.B} {
@@ -201,22 +209,22 @@ func (c *ABConfig) thresholdSummary() string {
 // validate reports what neither the config nor the flags supplied.
 func (c *ABConfig) validate(path string) error {
 	switch {
-	case c.B.Image == "":
-		return fmt.Errorf("no image to test: pass --b IMAGE, or set b.image in %s", path)
+	case c.B.Image == "" && c.B.Src == "":
+		return fmt.Errorf("no image to test: pass --b IMAGE or --b-src REF, or set b.image in %s", path)
 	case c.Profile.Path == "" && c.Profile.Inline == nil:
 		return fmt.Errorf("no workload: pass --workload NAME, or set profile in %s", path)
+	}
+	if len(c.Faults) > 0 {
+		if err := checkFaults(c.Faults); err != nil {
+			return fmt.Errorf("faults in %s: %w", path, err)
+		}
 	}
 	return nil
 }
 
 // workloadRef resolves --workload: a name is a profile in profiles/, a
 // path is taken as it is.
-func workloadRef(v string) ProfileRef {
-	if strings.Contains(v, "/") || strings.HasSuffix(v, ".yaml") || strings.HasSuffix(v, ".yml") {
-		return ProfileRef{Path: v}
-	}
-	return ProfileRef{Path: filepath.Join("profiles", v+".yaml")}
-}
+func workloadRef(v string) ProfileRef { return ProfileRef{Path: profilePath(v)} }
 
 // imageTag is an image reference's tag, or its last path element when it
 // carries none.
@@ -330,20 +338,19 @@ func (fs *flagSet) list(name string, split bool, usage string) *listFlag {
 
 // workload resolves the profile the two sides run, with the config's
 // duration/warmup/drain on top.
-func (c *ABConfig) workload() (*Profile, []byte, error) {
+func (c *ABConfig) workload() (*Profile, error) {
 	var p *Profile
-	src := c.Profile.src
 	if c.Profile.Inline != nil {
+		src, _ := yaml.Marshal(c.Profile.Inline)
 		var err error
 		if p, err = parseProfile(src, "inline"); err != nil {
-			return nil, nil, fmt.Errorf("profile: %w", err)
+			return nil, fmt.Errorf("profile: %w", err)
 		}
 	} else {
 		var err error
 		if p, err = loadProfile(c.Profile.Path); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		src, _ = os.ReadFile(c.Profile.Path)
 	}
 	if c.Duration > 0 {
 		p.Duration = c.Duration
@@ -365,7 +372,13 @@ func (c *ABConfig) workload() (*Profile, []byte, error) {
 		p.Agent.Env = env
 	}
 	p.Compose = append(p.Compose, c.Compose...)
-	return p, src, nil
+	if err := p.set(c.Set); err != nil {
+		return nil, fmt.Errorf("set: %w", err)
+	}
+	if len(c.Faults) > 0 {
+		p.Faults = []FaultStep{{Set: c.Faults}}
+	}
+	return p, nil
 }
 
 // abRun is one planned run: a side, a round, and where it lands.
@@ -415,12 +428,13 @@ type abSummary struct {
 }
 
 type abSide struct {
-	Side    string      `json:"side"`
-	Name    string      `json:"name"`
-	Image   string      `json:"image"`
-	Digest  string      `json:"digest,omitempty"`
-	Version string      `json:"agent_version,omitempty"`
-	Runs    []abSideRun `json:"runs"`
+	Side    string        `json:"side"`
+	Name    string        `json:"name"`
+	Image   string        `json:"image"`
+	Digest  string        `json:"digest,omitempty"`
+	Version string        `json:"agent_version,omitempty"`
+	Build   *report.Build `json:"build,omitempty"` // when aoc built the image from the checkout
+	Runs    []abSideRun   `json:"runs"`
 }
 
 type abSideRun struct {
@@ -449,13 +463,20 @@ func runAB(args []string) int {
 			"variant:<side>.",
 		"  aoc ab --b datadog/agent-dev:my-branch-py3 --workload baseline --focus \"is the new sender slower?\"\n"+
 			"  aoc ab --b datadog/agent-dev:my-branch-py3 --b-env DD_LOGS_CONFIG_TAG_FILTERS='{\"exclude\":[\"dirname:*\"]}'\n"+
+			"  aoc ab --b-src . --focus \"…\"          # build the checkout's working tree on the release, no CI needed\n"+
+			"  aoc ab --b-src . --a-src main         # both sides built the same way: only the branch differs\n"+
+			"  aoc ab --b … --workload baseline --set rate=20000 --fault latency_ms=300   # the same workload, heavier, behind a slow intake\n"+
 			"  aoc ab --b … --plan             # validate and show what would run\n"+
 			"  aoc ab --only b                 # rebuilt the dev image? re-run b, reuse a's results\n"+
 			"  aoc ab --config results/<name>/aoc.yaml --compare-only   # re-render a finished test")
 	fs.section("The test")
 	bImage := fs.Str("b", "", "the image under test (the config's `b.image` otherwise)")
+	bSrc := fs.Str("b-src", "", "build the image under test from the agent checkout instead: a git ref, or . for the working tree as it is (see aoc build)")
 	aImage := fs.Str("a", "", "the control image (the config's `a.image` otherwise, else "+defaultAImage+")")
+	aSrc := fs.Str("a-src", "", "build the control from the checkout too, e.g. main: then only the branch is between the sides")
 	workload := fs.Str("workload", "", "the workload both sides run: a name in profiles/, or a path (the config's `profile` otherwise)")
+	set := fs.list("set", true, "change a generator setting of the workload: rate=20000 for every generator, json.streams=16 for one; repeatable, commas allowed")
+	fault := fs.list("fault", true, "an intake fault both sides get for the whole window, e.g. latency_ms=300 or drop_rate=0.05; replaces the workload's fault timeline; repeatable, commas allowed")
 	focus := fs.Str("focus", "", "the question this test answers; it opens the brief and names the notebook")
 	code := fs.list("code", true, "a package under test, e.g. pkg/logs/sender; repeatable, commas allowed")
 	watch := fs.list("watch", true, "a compare.md metric to promote to the headline; repeatable, commas allowed")
@@ -486,11 +507,23 @@ func runAB(args []string) int {
 	if err != nil {
 		return fail("ab: %v", err)
 	}
+	if *aImage != "" && *aSrc != "" {
+		return fail("ab: --a and --a-src name the control twice; pass one")
+	}
+	if *bImage != "" && *bSrc != "" {
+		return fail("ab: --b and --b-src name the build under test twice; pass one")
+	}
 	if *aImage != "" {
-		cfg.A.Image = *aImage
+		cfg.A.Image, cfg.A.Src = *aImage, ""
+	}
+	if *aSrc != "" {
+		cfg.A.Src = *aSrc
 	}
 	if *bImage != "" {
-		cfg.B.Image = *bImage
+		cfg.B.Image, cfg.B.Src = *bImage, ""
+	}
+	if *bSrc != "" {
+		cfg.B.Src = *bSrc
 	}
 	if *workload != "" {
 		cfg.Profile = workloadRef(*workload)
@@ -513,6 +546,12 @@ func runAB(args []string) int {
 		return fail("ab: --b-env %v", err)
 	}
 	cfg.Env, cfg.B.Env = mergeEnv(cfg.Env, shared), mergeEnv(cfg.B.Env, candidate)
+	cfg.Set = append(cfg.Set, set.vals...)
+	if len(fault.vals) > 0 {
+		if cfg.Faults, err = parseFaults(fault.vals); err != nil {
+			return fail("ab: --fault: %v", err)
+		}
+	}
 	if *runs > 0 {
 		cfg.Runs = *runs
 	}
@@ -537,9 +576,35 @@ func runAB(args []string) int {
 	if err := cfg.validate(*config); err != nil {
 		return fail("ab: %v", err)
 	}
-	p, profileSrc, err := cfg.workload()
+	p, err := cfg.workload()
 	if err != nil {
 		return fail("ab: %v", err)
+	}
+	// Sides built from the checkout get their image name now — it is the
+	// branch, so it names the experiment — and are built once the plan is
+	// out, before any run.
+	checkout := ""
+	plans := map[string]string{}
+	pullBase := cfg.A.Pull == "always"
+	if cfg.A.built() || cfg.B.built() {
+		if checkout, err = buildSource(cfg.Source); err != nil {
+			return fail("ab: %v", err)
+		}
+		for _, sv := range []struct {
+			side string
+			v    *Variant
+		}{{"a", &cfg.A}, {"b", &cfg.B}} {
+			if !sv.v.built() {
+				continue
+			}
+			bs := cfg.buildSpec(sv.side, *sv.v, checkout, pullBase, nil, nil)
+			id, err := agentbuild.Resolve(context.Background(), bs)
+			if err != nil {
+				return fail("ab: --%s-src: %v", sv.side, err)
+			}
+			sv.v.Image, sv.v.Pull = id.Tag(bs.Base), "never"
+			plans[sv.side] = fmt.Sprintf("built from %s (%s) on %s", checkout, id.Describe(), bs.Base)
+		}
 	}
 	experiment := *name
 	if experiment == "" {
@@ -575,11 +640,15 @@ func runAB(args []string) int {
 	if p.Description != "" {
 		fmt.Fprintf(os.Stderr, "  %s\n", p.Description)
 	}
+	fmt.Fprintf(os.Stderr, "  generators: %s\n  faults: %s\n", p.summary(), p.faultsSummary())
 	for _, sv := range []struct {
 		side string
 		v    Variant
 	}{{"a", cfg.A}, {"b", cfg.B}} {
 		fmt.Fprintf(os.Stderr, "  %s  %-12s %s  (pull %s)%s\n", sv.side, sv.v.Name, sv.v.Image, sv.v.Pull, envSummary(sv.v.Env))
+		if plan := plans[sv.side]; plan != "" {
+			fmt.Fprintf(os.Stderr, "     %-12s %s\n", "", plan)
+		}
 	}
 	if len(cfg.Env) > 0 {
 		fmt.Fprintf(os.Stderr, "  both%s\n", envSummary(cfg.Env))
@@ -623,10 +692,41 @@ func runAB(args []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 	logf := newLogf()
+	// The images the checkout provides, a then b, before anything runs:
+	// a side whose results are reused is not rebuilt.
+	builds := map[string]*report.Build{}
+	for _, side := range []string{"a", "b"} {
+		v := cfg.A
+		if side == "b" {
+			v = cfg.B
+		}
+		if !v.built() || !containsSide(todo, side) {
+			continue
+		}
+		logPath := filepath.Join(root, "build-"+side+".log")
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			return fail("ab: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "── build %s: %s ──\n", v.Name, plans[side])
+		b, err := agentbuild.Run(ctx, cfg.buildSpec(side, v, checkout, pullBase, logFile, func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
+		}))
+		logFile.Close()
+		if err != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintln(os.Stderr, "\naoc: interrupted")
+				return 130
+			}
+			return fail("ab: build %s: %v (log: %s)", v.Name, err, logPath)
+		}
+		builds[side] = b
+		fmt.Fprintln(os.Stderr)
+	}
 	spec := func(r abRun, noBuild bool) runSpec {
 		return runSpec{
-			profile: p, profileSrc: profileSrc, name: r.name,
-			agent:      agentSpec{Image: r.variant.Image, Pull: r.variant.Pull, Env: r.variant.Env},
+			profile: p, name: r.name,
+			agent:      agentSpec{Image: r.variant.Image, Pull: r.variant.Pull, Env: r.variant.Env, Build: builds[r.side]},
 			resultsDir: r.dir,
 			composeCmd: *composeCmd, composeFile: *composeFile, intake: *intake,
 			noBuild: noBuild,
@@ -769,7 +869,7 @@ func runAB(args []string) int {
 		sum.Findings = []findings.Finding{}
 	}
 	for i, c := range cols {
-		side := abSide{Side: []string{"a", "b"}[i], Name: c.Name, Image: c.Runs[0].Agent.Image, Digest: c.Runs[0].Agent.Digest, Version: topKey(c.Runs[0].Agent.Versions)}
+		side := abSide{Side: []string{"a", "b"}[i], Name: c.Name, Image: c.Runs[0].Agent.Image, Digest: c.Runs[0].Agent.Digest, Version: topKey(c.Runs[0].Agent.Versions), Build: c.Runs[0].Agent.Build}
 		for _, r := range c.Runs {
 			dir := ""
 			for _, pr := range all {
@@ -790,7 +890,7 @@ func runAB(args []string) int {
 		fmt.Fprintf(os.Stderr, "  ab.json: %v\n", err)
 	}
 
-	fmt.Printf("\naoc ab %s — %s vs %s\n\n", experiment, report.AgentLabel(cols[0].Runs[0]), report.AgentLabel(cols[1].Runs[0]))
+	fmt.Printf("\naoc ab %s: %s vs %s\n\n", experiment, report.AgentLabel(cols[0].Runs[0]), report.AgentLabel(cols[1].Runs[0]))
 	for _, v := range res.Verdict {
 		fmt.Printf("  %s\n", v)
 	}
@@ -812,26 +912,21 @@ func runAB(args []string) int {
 	case nbURL != "":
 		fmt.Printf("  notebook: %s\n", nbURL)
 	case os.Getenv("DD_APP_KEY") == "":
-		fmt.Printf("  notebook: wrote %s (no DD_APP_KEY) — hand its cells to the Datadog MCP's create_datadog_notebook, or set the key and run `aoc ab --compare-only`\n", nbFile)
+		fmt.Printf("  notebook: wrote %s (no DD_APP_KEY); hand its cells to the Datadog MCP's create_datadog_notebook, or set the key and run `aoc ab --compare-only`\n", nbFile)
 	default:
 		fmt.Printf("  notebook: wrote %s (not created: notebook: false)\n", nbFile)
 	}
 	if len(todo) > 0 || *postEvent {
 		if !ddapi.FromEnv().Configured() {
-			fmt.Printf("  event: DD_API_KEY not set (env or .env) — the finished event was not posted\n")
+			fmt.Printf("  event: DD_API_KEY not set (env or .env), so the finished event was not posted\n")
 		}
 		postABEvent(experiment, cols, findings.EventText(res, in, nbURL))
 	}
 
-	bad := false
-	for _, c := range cols {
-		for _, r := range c.Runs {
-			if r.Delivery.Missing > 0 || r.Delivery.Duplicates > 0 {
-				bad = true
-			}
-		}
-	}
-	if bad {
+	// Exit 3 is the gate's verdict: what b lost, duplicated, orphaned or
+	// truncated. A loss on a is in the brief but is not the build under
+	// test's.
+	if !res.Gate.Pass {
 		return 3
 	}
 	return 0
@@ -874,7 +969,7 @@ func firstSentence(s string) string {
 	return s
 }
 
-// stripConclusionHeader drops the "# aoc A/B … — conclusion" heading and
+// stripConclusionHeader drops the "# aoc A/B …: conclusion" heading and
 // the trailing timestamp line aoc conclude writes, leaving the text.
 func stripConclusionHeader(s string) string {
 	var out []string
@@ -942,7 +1037,7 @@ func abColumns(cfg *ABConfig, all []abRun) ([]report.Column, error) {
 	}
 	for _, c := range cols {
 		if len(c.Runs) == 0 {
-			return nil, fmt.Errorf("no results for side %s — run without --only", c.Name)
+			return nil, fmt.Errorf("no results for side %s; run without --only", c.Name)
 		}
 	}
 	return cols, nil
@@ -954,7 +1049,12 @@ func createNotebook(ctx context.Context, nb *notebook.Notebook, outFile string, 
 	if err := os.WriteFile(outFile, nb.File(), 0o644); err != nil {
 		return "", err
 	}
+	urlFile := strings.TrimSuffix(outFile, ".json") + ".url"
 	if dryRun || client == nil || client.AppKey == "" {
+		// A re-render keeps the notebook the test created.
+		if b, err := os.ReadFile(urlFile); err == nil {
+			return strings.TrimSpace(string(b)), nil
+		}
 		return "", nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -963,7 +1063,7 @@ func createNotebook(ctx context.Context, nb *notebook.Notebook, outFile string, 
 	if err != nil {
 		return "", err
 	}
-	os.WriteFile(strings.TrimSuffix(outFile, ".json")+".url", []byte(url+"\n"), 0o644)
+	os.WriteFile(urlFile, []byte(url+"\n"), 0o644)
 	return url, nil
 }
 
@@ -990,7 +1090,7 @@ func postABEvent(experiment string, cols []report.Column, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err := client.PostEvent(ctx, ddapi.Event{
-		Title: fmt.Sprintf("aoc: A/B %s finished — %s vs %s", experiment, cols[0].Name, cols[1].Name), Text: text,
+		Title: fmt.Sprintf("aoc: A/B %s finished: %s vs %s", experiment, cols[0].Name, cols[1].Name), Text: text,
 		Tags: []string{"source:aoc", "harness:aoc", "experiment:" + experiment}, AlertType: "info", SourceTypeName: "aoc", DateHappened: time.Now().Unix(),
 	})
 	if err != nil {
@@ -1051,6 +1151,16 @@ func byRound(runs []abRun) [][]abRun {
 		out[i] = append(out[i], r)
 	}
 	return out
+}
+
+// containsSide reports whether any planned run is on that side.
+func containsSide(runs []abRun, side string) bool {
+	for _, r := range runs {
+		if r.side == side {
+			return true
+		}
+	}
+	return false
 }
 
 func containsRun(runs []abRun, r abRun) bool {

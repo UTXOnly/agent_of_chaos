@@ -1,4 +1,4 @@
-# aoc.example.yaml — every aoc.yaml setting, with its default.
+# aoc.example.yaml: every aoc.yaml setting, with its default.
 #
 # Nobody runs this file: it is the reference. The shipped aoc.yaml holds
 # the settings this checkout tests with (the control image, the shared
@@ -7,6 +7,7 @@
 #
 #   aoc ab --b IMAGE --workload NAME --focus "the question this answers"
 #   aoc ab --b IMAGE --b-env DD_FEATURE=true       # the flag under test
+#   aoc ab --b IMAGE --set rate=20000 --fault latency_ms=300   # the workload, tuned
 #   aoc ab --b IMAGE --code pkg/logs/sender        # where to look in the source
 #   aoc ab --plan                                  # validate and print what would run
 #   aoc ab --only b                                # rebuilt the dev image? re-run b, reuse a's
@@ -17,14 +18,13 @@
 # its own stack, against its own fake logs intake): side `a` is the control
 # (the latest public release by default), side `b` the build under test.
 # The harness then writes an investigation brief,
-# results/<name>/findings.md: which headline metrics regressed, and the
-# evidence that says why — memory by process and by cgroup, the agent's own
-# CPU/heap profiles diffed function by function, its telemetry, its log —
-# followed by the improvements and the full table. The same brief leads the
+# results/<name>/findings.md: which signals regressed, and the evidence
+# that says why (memory by process and by cgroup, the agent's own CPU and
+# heap profiles diffed function by function, its telemetry, its log). The same brief leads the
 # Datadog notebook, and every aoc.* metric, event and agent metric/profile
 # is tagged experiment:<name> variant:<side>.
 #
-# The config a test ran with — the settings plus the flags — is written to
+# The config a test ran with, settings and flags together, is written to
 # results/<name>/aoc.yaml, so `aoc ab --config results/<name>/aoc.yaml`
 # repeats it.
 #
@@ -42,15 +42,16 @@
 # name: my-feature
 
 ## @param profile - string or mapping - optional - default: none (--workload)
-## The workload both sides get: an experiment profile (see profiles/README.md
-## and `aoc profiles`), or the profile written inline, e.g.
+## The workload both sides get: a profile in profiles/ (`aoc profiles`
+## lists them, profiles/README.md has the format), or the profile written
+## inline, e.g.
 ##
 ##   profile:
 ##     duration: 3m
 ##     warmup: 20s
 ##     generators:
-##       gen-plain: { streams: 8, rate: 5000 }
-##       gen-json:  { streams: 8, rate: 5000 }
+##       plain: { streams: 8, rate: 5000 }
+##       json:  { format: json, streams: 8, rate: 5000 }
 ##     faults:
 ##       - { at: 60s, set: { error_rate: 0.5, error_status: 503 } }
 ##       - { at: 90s, clear: true }
@@ -59,6 +60,25 @@
 ## path is used as it is. One of the two must give a workload.
 #
 profile: profiles/baseline.yaml
+
+## @param set - list of strings - optional
+## Generator settings changed on top of the workload, as `aoc ab --set`
+## writes them: KEY=VALUE for every generator, <generator>.KEY=VALUE for
+## one. Usually from the command line; the test's saved aoc.yaml keeps
+## them so --config repeats the test.
+#
+# set:
+#   - rate=20000
+#   - json.streams=16
+
+## @param faults - map - optional
+## Intake faults for the whole window, both sides, replacing the workload's
+## fault timeline. Usually `aoc ab --fault K=V`. Fields: latency_ms,
+## jitter_ms, error_rate, error_status, drop_rate, outage, read_bps, note.
+#
+# faults:
+#   latency_ms: 300
+#   drop_rate: 0.05
 
 ## @param focus - string - optional
 ## The question this test answers, in one line. It opens the brief and
@@ -90,7 +110,7 @@ duration: 10m
 # threshold: 10
 
 ## @param thresholds - map - optional - default: threshold for every signal
-## The same, per signal — throughput, saturation, cpu, memory — for a test
+## The same, per signal (throughput, saturation, cpu, memory) for a test
 ## that cares about one of them more than the others. Any other key is an
 ## error. `aoc ab --threshold N` sets all four.
 #
@@ -121,7 +141,7 @@ duration: 10m
 ## and both agents see the same moment of the host. They do share the
 ## host's CPU and disk, so keep the workload well inside what the machine
 ## can do twice over. `false` (or `aoc ab --sequential`) runs them one
-## after the other — a, b, a, b, … — in the single `aoc` project.
+## after the other (a, b, a, b, …) in the single `aoc` project.
 #
 # parallel: true
 
@@ -147,6 +167,17 @@ a:
   #
   image: datadog/agent:7
 
+  ## @param src - string - optional
+  ## Build this side from the agent checkout (`source` below) instead of
+  ## pulling `image`: a git ref (main, a branch, a commit), or `.` for the
+  ## checkout's working tree as it is, uncommitted changes included. aoc
+  ## compiles the agent and rtloader in the agent's Linux dev-env container
+  ## and layers them on `build.base`, the release image, whose embedded
+  ## Python and integrations it keeps. Usually from `aoc ab --a-src main`,
+  ## so only the branch is between the two sides.
+  #
+  # src: main
+
   ## @param name - string - optional - default: a
   ## The side's label in tables, charts and the variant:<name> tag.
   #
@@ -170,17 +201,23 @@ a:
 ## while. One of the two must give an image.
 #
 # b:
-#   ## @param image - string - required
+#   ## @param image - string - required unless src is set
 #   ## The candidate: a CI build of a branch (datadog/agent-dev:<branch>-py3),
 #   ## the tip of master (datadog/agent-dev:master-py3), or something you built
 #   ## (then `pull: never`).
 #   #
 #   image: datadog/agent-dev:master-py3
 #
+#   ## @param src - string - optional
+#   ## Or build it from the checkout: `.` is the working tree with its
+#   ## uncommitted changes, anything else a git ref. Usually `aoc ab --b-src .`.
+#   #
+#   # src: .
+#
 #   # name: candidate
 #   # pull: always
 #
-#   ## Settings only the candidate gets — typically the feature under test.
+#   ## Settings only the candidate gets, typically the feature under test.
 #   ## `aoc ab --b-env K=V` merges into this.
 #   #
 #   # env:
@@ -194,16 +231,40 @@ a:
 #   DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: "false"
 #   DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
 
+## @param build - mapping - optional
+## How a side with `src` is built (`aoc build` does the same on its own).
+## The Go binary and rtloader are compiled in `builder`, the agent's Linux
+## developer image, against the embedded Python of `base`, then layered on
+## `base`, so the image is the release with only the Go code replaced.
+## Scratch worktrees and caches live under ~/.cache/aoc/agent-build
+## (AOC_BUILD_CACHE); the Go build cache is a docker volume,
+## aoc-agent-build-cache, so rebuilds are incremental.
+#
+# build:
+#   ## @param base - string - optional - default: a.image, or datadog/agent:7 when a has src too
+#   ## The release the build sits on. With `pull: always` on a it is re-pulled
+#   ## first, so the base is the control's exact image.
+#   #
+#   # base: datadog/agent:7
+#
+#   ## @param builder - string - optional - default: datadog/agent-dev-env-linux
+#   ## The image the build runs in. It tracks main's toolchain; pin a tag if a
+#   ## branch needs an older one.
+#   #
+#   # builder: datadog/agent-dev-env-linux
+
 ##################################
 ## The code
 ##################################
 
 ## @param source - string - optional - default: $DATADOG_AGENT_SRC, else ../datadog-agent
-## A checkout of the agent's repository. The profiler tags every upload
-## with the build's commit, so with a checkout that has both commits the
-## brief can say, for each function the profiles flagged, whether its file
-## changed between the two builds — and the investigation can open it
-## (`git -C <source> show <commit>:<file>`).
+## A checkout of the agent's repository: what `src` sides are built from,
+## and what the brief reads. The profiler tags every upload with the
+## build's commit, so with a checkout that has both commits the brief can
+## say, for each function the profiles flagged, whether its file changed
+## between the two builds, and the investigation can open it
+## (`git -C <source> show <commit>:<file>`). For a side built from the
+## working tree, the changes are measured against that tree.
 #
 # source: ~/src/datadog-agent
 
@@ -224,7 +285,7 @@ a:
 ## Results root. For the pair the test writes results/<name>/findings.md
 ## (the brief: regressions, evidence, improvements, the headline), findings.json,
 ## compare.md (every metric, per-process table, telemetry counters), ab.json
-## (identities, windows, findings, file paths — for tooling), notebook.json
+## (identities, windows, findings, file paths; for tooling), notebook.json
 ## and the config as it ran; per run, results/<name>/<side>[-<round>]/ with
 ## report.md, report.json, timeseries.csv, profiles/ (the agent's pprof
 ## uploads over the window), agent.log and agent-status.txt.
@@ -234,8 +295,8 @@ a:
 ## @param notebook - boolean - optional - default: true when DD_APP_KEY is set
 ## Create the A/B notebook in Datadog: the brief first (verdict, one cell per
 ## regression with its evidence, the profile diffs and links), the
-## profiler's comparison view embedded — a's flame graph beside b's for CPU,
-## heap and allocations, then one per mover focused on that function — and
+## profiler's comparison view embedded (a's flame graph beside b's for CPU,
+## heap and allocations, then one per mover focused on that function) and
 ## the charts with both agents overlaid, the full table last. notebook.json is
 ## always written and can be handed to the Datadog MCP's
 ## create_datadog_notebook instead. `--focus` names the notebook.

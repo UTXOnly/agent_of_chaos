@@ -8,8 +8,8 @@ can mislead you.
 
 Every record the generator writes carries `aoc=<gen>/<stream>/<seq>` (plain
 text, right after the logger name) or `"aoc":"<gen>/<stream>/<seq>"` (JSON,
-near the start of the object). `gen` is the generator's `--name` (the container
-id under `--scale`), `stream` the service name / file, `seq` a per-stream
+near the start of the object). `gen` is the generator's name in the profile
+(`app-03` for a replica), `stream` the service name / file, `seq` a per-stream
 counter starting at 1 that survives chaos restarts. Continuation lines of a
 stack trace have no marker: they belong to the record above them.
 
@@ -17,7 +17,7 @@ stack trace have no marker: they belong to the record above them.
 
 | field | definition |
 |---|---|
-| **records written** | Σ generators' `records` (each pushes its counters every second; ≤ 1 s stale). If the intake has already seen a higher seq for a stream, that seq is used — a marker received proves the record exists. |
+| **records written** | Σ generators' `records` (each pushes its counters every second; ≤ 1 s stale). If the intake has already seen a higher seq for a stream, that seq is used: a marker received proves the record exists. |
 | **logs received** | every log the intake accepted with 202, including logs from other sources. |
 | **with a marker / unique** | marked logs, and distinct `(gen, stream, seq)` triples. |
 | **duplicates** | a seq seen again. The usual cause: the agent did not get the intake's response (timeouts, `drop_rate`) and re-sent. |
@@ -64,7 +64,7 @@ decompression; message bytes (just the log text) are in the streams table.
   trace-agent, process-agent, security-agent…).
 * **container anon / file**: the cgroup's split of that memory (`anon` and
   `file` on cgroup v2, `rss`/`cache` on v1). *anon* is the processes' own
-  pages — the number that grows when something leaks; *file* is page cache
+  pages, the number that grows when something leaks; *file* is page cache
   charged to the container (files the agent read first, e.g. Python
   integrations), which the kernel reclaims under pressure. A container
   memory increase that is all *file* is not a leak.
@@ -121,7 +121,7 @@ signals. Everything else is in `compare.md`.
 
 **The delivery gate** fails when the candidate lost, duplicated, orphaned
 or truncated a record. When the baseline has the same counter, the gate
-line says so — that is the workload or the harness, not the build, but it
+line says so: that is the workload or the harness, not the build, but it
 still fails. Out-of-order delivery is reported in the gate line and does
 not fail it; the delivery ratio is shown beside it.
 
@@ -153,7 +153,7 @@ The brief is then: the verdict line (`pass`, `fail: <gate reason>`,
 and the workload, the conclusion once `aoc conclude` has written one, one
 section per signal that regressed (a one-sentence reading and one or two
 tables that name the cause), the profile views not already shown, and the
-code behind the movers — each located at `file:line`, linked at the tested
+code behind the movers, each located at `file:line`, linked at the tested
 commit, and, with a checkout that has both commits, marked new, changed or
 unchanged between the builds.
 
@@ -171,8 +171,8 @@ suggests is focused on the top in-scope mover.
 Every series matching `--telemetry-filter` (default: `logs*`, `process_*`, a
 few `go_*`) is tracked. Counters report Δ over the window and a rate; gauges
 report the last value and `mean`, their average over the window's scrapes
-(one every `--scrape-interval`). Comparisons prefer the mean — a gauge's
-last value is one sample and a busy pipeline's ratios bounce — and fall back
+(one every `--scrape-interval`). Comparisons prefer the mean (a gauge's
+last value is one sample and a busy pipeline's ratios bounce) and fall back
 to the last value for runs recorded before `mean` existed.
 **pipeline utilization (busiest component)** is the maximum of
 `logs_component_utilization__ratio{name}` over the components: the share of
@@ -184,7 +184,7 @@ starves it, so read it together with throughput. Names follow the agent's
 `logs__destination_http_resp{status_code}`, `logs__rotations_nix`,
 `logs__sender_latency_*`, `logs_component_utilization__ratio{name}`,
 `logs_sender__send_wait`, … Needs `DD_TELEMETRY_ENABLED=true` on the agent and
-network reach to its `expvar_port` (5000, bound to localhost — hence the shared
+network reach to its `expvar_port` (5000, bound to localhost, hence the shared
 network namespace in the compose files).
 
 ## HTTP

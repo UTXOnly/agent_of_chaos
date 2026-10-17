@@ -1,5 +1,5 @@
 name: multiline-heavy
-description: 35% of records carry Python/Java/Go stack traces. Orphan continuation lines and "multiline received / written" show whether aggregation kept up; try with and without DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION.
+description: 35% of records carry Python, Java or Go stack traces. Orphan continuation lines and "multiline received / written" show whether aggregation kept up. Try with and without DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION.
 duration: 3m
 warmup: 20s
 drain: 45s
@@ -7,5 +7,4 @@ agent:
   env:
     DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: "false"
 generators:
-  gen-plain: { streams: 12, rate: 8000, multiline-rate: 0.35 }
-  gen-json:  { enabled: false }
+  plain: { streams: 12, rate: 8000, multiline-rate: 0.35 }

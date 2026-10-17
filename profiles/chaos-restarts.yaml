@@ -1,8 +1,8 @@
 name: chaos-restarts
-description: Streams crash and restart at random (files close and reopen, sequence resumes) — 3 crashes per stream per minute, 5 s downtime. Exercises tailer file-handle lifecycle.
+description: Writers crash and restart at random, so files close and reopen and the sequence resumes. 3 crashes per stream per minute, 5 s downtime. Exercises the tailer's file-handle lifecycle.
 duration: 4m
 warmup: 20s
 drain: 45s
 generators:
-  gen-plain: { mode: chaos, streams: 12, rate: 8000, chaos-crash-rate: 3, chaos-restart-delay: 5s }
-  gen-json:  { mode: chaos, streams: 12, rate: 8000, chaos-crash-rate: 3, chaos-restart-delay: 5s }
+  plain: { mode: chaos, streams: 12, rate: 8000, chaos-crash-rate: 3, chaos-restart-delay: 5s }
+  json:  { format: json, mode: chaos, streams: 12, rate: 8000, chaos-crash-rate: 3, chaos-restart-delay: 5s }

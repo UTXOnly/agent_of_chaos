@@ -4,13 +4,12 @@ The intake submits gauges every `--dd-interval` (10 s) to `/api/v2/series`
 and lifecycle events to `/api/v1/events`. Everything carries `run:<name>`
 (the intake's `--name`; `aoc run --name`), `agent_image:<image>` when known,
 `agent_version:<v>` once the agent has sent a payload, and whatever
-`--dd-tags` adds (the compose files add `harness:aoc`; the fleet adds
-`experiment:log-tag-filter,variant:<AOC_VARIANT>`).
+`--dd-tags` adds (the compose file adds `harness:aoc`).
 
 `aoc ab` adds `experiment:<name>` and `variant:<side>` to every run of a
-test — on the intake's `aoc.*` metrics and events, and (through `DD_TAGS`
+test, on the intake's `aoc.*` metrics and events, and (through `DD_TAGS`
 and `DD_INTERNAL_PROFILING_EXTRA_TAGS`) on the agent's own metrics and
-profiles — with `run:<name>-<side>[-<round>]` per run. So
+profiles, with `run:<name>-<side>[-<round>]` per run. So
 `avg:aoc.agent.process.cpu_percent{experiment:my-feature} by {variant}` is
 the two agents on one chart, and the profiler can be filtered to
 `service:datadog-agent experiment:my-feature variant:b`.
@@ -18,7 +17,7 @@ the two agents on one chart, and the profiler can be filtered to
 Rates (`*_per_sec`, `*.rate`) are averages over the submission interval.
 Ledger values are cumulative since the last window reset.
 
-## `aoc.gen.*` — what the generators wrote (tag `gen:<name>`)
+## `aoc.gen.*`: what the generators wrote (tag `gen:<name>`)
 
 | metric | meaning |
 |---|---|
@@ -27,7 +26,7 @@ Ledger values are cumulative since the last window reset.
 | `aoc.gen.streams`, `.target_rate` | active streams, configured aggregate rate (0 = flat out) |
 | `aoc.gen.cpu_percent`, `.rss_bytes` | the generator process |
 
-## `aoc.intake.*` — what the intake received
+## `aoc.intake.*`: what the intake received
 
 | metric | meaning |
 |---|---|
@@ -43,7 +42,7 @@ Ledger values are cumulative since the last window reset.
 | `aoc.intake.orphans_per_sec`, `.unmarked_per_sec`, `.truncated_per_sec`, `.inflight`, `.tcp_frames_per_sec` | the rest |
 | `aoc.stream.missing`, `aoc.stream.duplicates` (`gen:`, `stream:`) | only for streams with a problem, at most 300 |
 
-## `aoc.agent.*` — the agent under test
+## `aoc.agent.*`: the agent under test
 
 | metric | source |
 |---|---|
@@ -98,7 +97,7 @@ the local diff points at) or `get_profiling_timeseries` grouped by
 `aoc: measurement window opened`, `aoc: faults set|clear`, and whatever
 `POST /harness/mark?text=…` posts (`aoc run` marks window closed, generators
 stopped, drain finished). Query them with `source:aoc run:<name>`. A finished
-A/B test posts `aoc: A/B <name> finished — a vs b` as Markdown
+A/B test posts `aoc: A/B <name> finished: a vs b` as Markdown
 (`experiment:<name>`): the verdict line (`pass`, `fail: <what the delivery
 gate caught>` or `regression: <signals>`), the signals that moved, the gate
 line and the notebook link. `aoc conclude` posts `aoc: A/B <name>

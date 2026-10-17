@@ -114,11 +114,11 @@ func TestMemoryRegressionAndBrief(t *testing.T) {
 		"| memory | core agent RSS max | 250.0 MB | 320.0 MB | **+28.0%** | ±10% |",
 		"| signal | metric | release | dev | Δ | threshold |",
 		"Throughput: held by the generators at 10.0k/s and both sides kept up, so saturation carries the signal.",
-		"Delivery gate: pass — nothing lost, duplicated, orphaned or truncated in dev. Delivery ratio 100.00% → 100.00%.",
+		"Delivery gate: pass. Nothing lost, duplicated, orphaned or truncated in dev. Delivery ratio 100.00% → 100.00%.",
 		"## Tested\n\n| side | image | version | commit | only this side |",
 		"| release | `datadog/agent:7` | 7.83.2 | – | – |",
 		"| dev | `datadog/agent:7` | 7.83.2 | – | `DD_X=1` |",
-		"Workload `baseline` (steady mix) — 16 streams at 10.0k/s, 10m00s window, 1 round per side.",
+		"Workload `baseline` (steady mix): 16 streams at 10.0k/s, 10m00s window, 1 round per side.",
 		"## Where\n\n### Memory\n\nThe core agent's Go heap grew",
 		"Next: `explore_profiling_flame_graph`",
 		"Every metric, the process table and the telemetry counters: `compare.md`.",
@@ -164,7 +164,7 @@ func TestGateFails(t *testing.T) {
 	if res.Gate.Pass {
 		t.Fatal("the gate should fail when records are lost")
 	}
-	for _, want := range []string{"1,200 lost / missing in dev", "3 duplicates in dev (2 in release too — the workload or the harness, not the build)"} {
+	for _, want := range []string{"1,200 lost / missing in dev", "3 duplicates in dev (2 in release too: the workload or the harness, not the build)"} {
 		if !strings.Contains(res.Gate.Line, want) {
 			t.Errorf("gate line missing %q:\n%s", want, res.Gate.Line)
 		}
@@ -405,6 +405,52 @@ func TestCodeSectionAndScoping(t *testing.T) {
 	if next := strings.Join(res.Sections[0].Next, " "); !strings.Contains(next, `frameRegexFilter="sender\.\(\*Sender\)\.run"`) {
 		t.Errorf("next: %s", next)
 	}
+	// b built by aoc from the working tree: the tree is at shaB plus an
+	// uncommitted edit to the sender, and the checkout is still there, so
+	// changes are measured against the tree — and the build's commit
+	// stands in for the profiler's.
+	os.WriteFile(filepath.Join(src, "pkg", "logs", "sender", "sender.go"), []byte("package sender\n\n// changed\n// and again, uncommitted\n"), 0o644)
+	b.Agent.Commit = ""
+	b.Agent.Build = &report.Build{Image: "aoc/agent-dev:dev-dirty", Source: src, Ref: ".", Branch: "dev", Commit: shaB, Dirty: 1, Base: "datadog/agent:7"}
+	in.Cols = columns(a, b)
+	res = Build(in)
+	byFn = map[string]CodeRow{}
+	for _, r := range res.Code {
+		byFn[r.Function] = r
+	}
+	if snd := byFn["sender.(*Sender).run"]; snd.Change != "+3/−0" {
+		t.Errorf("working-tree sender row: %+v", snd)
+	}
+	if keep := byFn["tagfilter.(*Scoped).Keep"]; keep.Change != "new in b" {
+		t.Errorf("working-tree keep row: %+v", keep)
+	}
+	if !strings.Contains(res.CodeNote, "dev at `"+shaB[:8]+"`") || !strings.Contains(res.CodeNote, "dev is the working tree of `"+src+"` (its commit plus 1 file uncommitted)") {
+		t.Errorf("working-tree code note: %s", res.CodeNote)
+	}
+	if !strings.Contains(res.Tested, "dev was built by aoc from `"+src+"`, `dev` ("+shaB[:8]+") plus 1 file uncommitted") {
+		t.Errorf("tested: %s", res.Tested)
+	}
+	// Once the checkout moves on, the tree no longer stands for the build:
+	// back to the commits.
+	run("add", ".")
+	run("commit", "-q", "-m", "c")
+	res = Build(in)
+	if snd := byFn["sender.(*Sender).run"]; snd.Change != "+3/−0" {
+		t.Errorf("sender row before the commit: %+v", snd)
+	}
+	for _, r := range res.Code {
+		if r.Function == "sender.(*Sender).run" && r.Change != "+2/−0" {
+			t.Errorf("after the checkout moved on: %+v", r)
+		}
+	}
+	if strings.Contains(res.CodeNote, "working tree") {
+		t.Errorf("code note after the checkout moved on: %s", res.CodeNote)
+	}
+	b.Agent.Build = nil
+	b.Agent.Commit = shaB
+	run("reset", "-q", "--hard", shaB)
+	in.Cols = columns(a, b)
+
 	// Without a checkout the rows still locate the code, without change status.
 	in.Source = ""
 	res = Build(in)

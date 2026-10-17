@@ -311,7 +311,7 @@ func ForCompare(reports []*report.Report, o Options) *Notebook {
 		sc := scopeFor(r)
 		for _, i := range keyCharts {
 			c := runCharts[i]
-			nb.Cells = append(nb.Cells, timeseries(fmt.Sprintf("%s — %s", r.Name, c.title), c.build(sc, o.Prefix, container(r, &o)), r.WindowStart.Add(-o.Margin), r.WindowEnd.Add(o.Margin), c.unit))
+			nb.Cells = append(nb.Cells, timeseries(fmt.Sprintf("%s: %s", r.Name, c.title), c.build(sc, o.Prefix, container(r, &o)), r.WindowStart.Add(-o.Margin), r.WindowEnd.Add(o.Margin), c.unit))
 		}
 	}
 	nb.Cells = append(nb.Cells, markdown(digDeeper(reports[0], &o)))
@@ -389,7 +389,7 @@ func ForAB(title string, cols []report.Column, o Options) *Notebook {
 		fmt.Fprintf(&head, "## Tested\n\n%s\n", f.Tested)
 	} else {
 		for _, c := range cols {
-			fmt.Fprintf(&head, "- **%s** — agent %s\n", c.Name, report.AgentLabel(c.Runs[0]))
+			fmt.Fprintf(&head, "- **%s**: agent %s\n", c.Name, report.AgentLabel(c.Runs[0]))
 		}
 	}
 	nb.Cells = append(nb.Cells, markdown(head.String()))
@@ -460,7 +460,7 @@ func compareCells(f *findings.Result, cols []report.Column, o *Options, timeshif
 		return cells
 	}
 	for _, m := range findings.Movers(f) {
-		cells = append(cells, markdown(fmt.Sprintf("### `%s` — %s, %s\n", m.Function, m.View, m.Delta)),
+		cells = append(cells, markdown(fmt.Sprintf("### `%s`: %s, %s\n", m.Function, m.View, m.Delta)),
 			iframe(findings.CompareURL(a, b, o.AppURL, o.Margin, m.ProfileType, m.Focus)))
 	}
 	return cells

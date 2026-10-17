@@ -25,7 +25,7 @@ paths:
   Rates are per wall-clock second; levels are averaged over captures.
 - Evidence tables are small: ≤ 15 rows, values rendered with the metric's
   own formatter, a one-line "how to read it" where the table needs one.
-  The brief is read by people and agents with a budget — add a table only
+  The brief is read by people and agents with a budget; add a table only
   when it names a cause the existing ones cannot.
 - Every new number gets a row in `docs/measurements.md` (definition and
   where it misleads) and, if it is emitted, in `docs/datadog.md`.

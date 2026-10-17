@@ -61,7 +61,7 @@ func runConclude(args []string) int {
 		return fail("conclude: ab.json: %v", err)
 	}
 	out := filepath.Join(*results, "conclusion.md")
-	body := fmt.Sprintf("# aoc A/B %s — conclusion\n\n%s\n\n_%s_\n", sum.Experiment, strings.TrimSpace(text), time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	body := fmt.Sprintf("# aoc A/B %s: conclusion\n\n%s\n\n_%s_\n", sum.Experiment, strings.TrimSpace(text), time.Now().UTC().Format("2006-01-02 15:04 UTC"))
 	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
 		return fail("conclude: %v", err)
 	}
@@ -104,13 +104,13 @@ func runConclude(args []string) int {
 	case nbURL == "":
 		fmt.Println("no notebook recorded for this test; `aoc ab --compare-only` (with DD_APP_KEY) creates one with the conclusion on top")
 	case client.AppKey == "":
-		fmt.Printf("notebook: %s — no DD_APP_KEY, so add the conclusion as its first cell yourself (Datadog MCP edit_datadog_notebook, or `aoc conclude` again with the key)\n", nbURL)
+		fmt.Printf("notebook: %s (no DD_APP_KEY): add the conclusion as its first cell yourself (Datadog MCP edit_datadog_notebook, or `aoc conclude` again with the key)\n", nbURL)
 	default:
 		cell := "## Conclusion\n\n" + strings.TrimSpace(text) + "\n"
 		if err := client.PrependNotebookCell(ctx, ddapi.NotebookID(nbURL), cell); err != nil {
 			return fail("conclude: notebook: %v", err)
 		}
-		fmt.Printf("notebook: %s — conclusion added as the first cell\n", nbURL)
+		fmt.Printf("notebook: %s (conclusion added as the first cell)\n", nbURL)
 	}
 	fmt.Println("`aoc ab --compare-only` re-renders findings.md with the conclusion on top")
 	return 0
