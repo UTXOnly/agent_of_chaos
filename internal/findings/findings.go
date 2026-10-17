@@ -532,7 +532,25 @@ func tested(in Input) string {
 	if s := dedupe(shared); len(s) > 0 {
 		fmt.Fprintf(&b, "Both sides: %s.\n", strings.Join(s, "; "))
 	}
+	for _, c := range in.Cols {
+		if bd := c.Runs[0].Agent.Build; bd != nil {
+			fmt.Fprintf(&b, "%s was built by aoc from %s: the agent binary and rtloader from there, on the release image %s (its Python and integrations).\n", c.Name, builtFrom(bd), code(bd.Base))
+		}
+	}
 	return b.String()
+}
+
+// builtFrom says what a built side came out of: the checkout, the branch
+// or ref, the commit, and the uncommitted changes on top.
+func builtFrom(b *report.Build) string {
+	at := "`" + short(b.Commit) + "`"
+	if b.Branch != "" {
+		at = "`" + b.Branch + "` (" + short(b.Commit) + ")"
+	}
+	if b.Dirty > 0 {
+		at += fmt.Sprintf(" plus %s uncommitted", plural(b.Dirty, "file"))
+	}
+	return "`" + b.Source + "`, " + at
 }
 
 // configFor splits the configuration differences into what only this side
@@ -1244,7 +1262,8 @@ func codeRows(in Input, res *Result) ([]CodeRow, string) {
 	var rows []CodeRow
 	seen := map[string]bool{}
 	src := in.Source
-	canDiff := src != "" && a.Agent.Commit != "" && b.Agent.Commit != "" && hasCommit(src, a.Agent.Commit) && hasCommit(src, b.Agent.Commit)
+	ra, rb := sideRev(src, a), sideRev(src, b)
+	canDiff := src != "" && ra.commit != "" && rb.commit != "" && hasCommit(src, ra.commit) && hasCommit(src, rb.commit)
 	for _, d := range res.Profiles {
 		for _, r := range scopedRows(d, in, 4) {
 			path, where := prof.RepoPath(r.File, mod)
@@ -1254,7 +1273,7 @@ func codeRows(in Input, res *Result) ([]CodeRow, string) {
 			seen[r.Function] = true
 			row := CodeRow{Function: prof.ShortFunc(r.Function), View: d.Label, Delta: prof.FormatDelta(r.Delta, d.Unit), File: path, Line: r.Line, Where: where, Scope: inScope(r.File, in)}
 			if canDiff {
-				row.Change = fileChange(src, a.Agent.Commit, b.Agent.Commit, path)
+				row.Change = fileChange(src, ra, rb, path)
 			}
 			if b.Agent.Repo != "" && b.Agent.Commit != "" {
 				row.URL = fmt.Sprintf("%s/blob/%s/%s#L%d", strings.TrimSuffix(b.Agent.Repo, ".git"), b.Agent.Commit, path, r.Line)
@@ -1268,19 +1287,56 @@ func codeRows(in Input, res *Result) ([]CodeRow, string) {
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Scope && !rows[j].Scope })
 	note := fmt.Sprintf("Both builds come from `%s`", mod)
 	switch {
-	case a.Agent.Commit != "" && b.Agent.Commit != "":
-		note += fmt.Sprintf(": %s at `%s`, %s at `%s`.", in.Cols[0].Name, short(a.Agent.Commit), in.Cols[1].Name, short(b.Agent.Commit))
+	case ra.commit != "" && rb.commit != "":
+		note += fmt.Sprintf(": %s at `%s`, %s at `%s`.", in.Cols[0].Name, short(ra.commit), in.Cols[1].Name, short(rb.commit))
 	default:
 		note += "; the profiler did not report the commits (older agent), so file changes could not be checked."
 	}
 	switch {
 	case src == "":
 		note += " No checkout configured (`source:` in aoc.yaml or DATADOG_AGENT_SRC), so whether these files changed is not shown."
-	case a.Agent.Commit == "" || b.Agent.Commit == "":
+	case ra.commit == "" || rb.commit == "":
 	case !canDiff:
 		note += " The checkout lacks one of the commits (`git fetch` it), so file changes are not shown."
+	case rb.tree:
+		note += fmt.Sprintf(" %s is the working tree of `%s` — its commit plus %s uncommitted — and file changes are measured against that tree.", in.Cols[1].Name, src, plural(b.Agent.Build.Dirty, "file"))
+	case ra.tree:
+		note += fmt.Sprintf(" %s is the working tree of `%s` — its commit plus %s uncommitted — and file changes are measured against that tree.", in.Cols[0].Name, src, plural(a.Agent.Build.Dirty, "file"))
 	}
 	return rows, note
+}
+
+// rev is what one side's code is: a commit, or — for an image aoc built
+// from the checkout's working tree, while that tree is still at the same
+// commit — the tree itself, uncommitted changes included.
+type rev struct {
+	commit string
+	tree   bool
+}
+
+func sideRev(src string, r *report.Report) rev {
+	commit := r.Agent.Commit
+	bd := r.Agent.Build
+	if bd == nil {
+		return rev{commit: commit}
+	}
+	if commit == "" {
+		commit = bd.Commit
+	}
+	if bd.Dirty == 0 || src == "" || !samePath(src, bd.Source) {
+		return rev{commit: commit}
+	}
+	head, err := git(src, "rev-parse", "HEAD")
+	return rev{commit: commit, tree: err == nil && head == bd.Commit}
+}
+
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 func git(dir string, args ...string) (string, error) {
@@ -1295,19 +1351,38 @@ func hasCommit(dir, sha string) bool {
 	return err == nil
 }
 
-// fileChange summarises one file's change between two commits.
-func fileChange(dir, a, b, path string) string {
-	_, errA := git(dir, "cat-file", "-e", a+":"+path)
-	_, errB := git(dir, "cat-file", "-e", b+":"+path)
+// fileChange summarises one file's change between two revisions: two
+// commits, or a commit and the working tree.
+func fileChange(dir string, a, b rev, path string) string {
+	exists := func(r rev) bool {
+		if r.tree {
+			_, err := os.Stat(filepath.Join(dir, path))
+			return err == nil
+		}
+		_, err := git(dir, "cat-file", "-e", r.commit+":"+path)
+		return err == nil
+	}
+	inA, inB := exists(a), exists(b)
 	switch {
-	case errA != nil && errB != nil:
+	case !inA && !inB:
 		return "not in repo"
-	case errA != nil:
+	case !inA:
 		return "new in b"
-	case errB != nil:
+	case !inB:
 		return "removed in b"
 	}
-	out, err := git(dir, "diff", "--numstat", a, b, "--", path)
+	var out string
+	var err error
+	switch {
+	case a.tree && b.tree:
+		return "unchanged"
+	case b.tree:
+		out, err = git(dir, "diff", "--numstat", a.commit, "--", path)
+	case a.tree:
+		out, err = git(dir, "diff", "--numstat", "-R", b.commit, "--", path)
+	default:
+		out, err = git(dir, "diff", "--numstat", a.commit, b.commit, "--", path)
+	}
 	if err != nil {
 		return ""
 	}

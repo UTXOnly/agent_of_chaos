@@ -36,10 +36,16 @@ headline.
 2. **Launch** one test from the command line —
    `./bin/aoc ab --b IMAGE --focus "…" [--workload NAME] [--code PKG]…`
    (skill: `ab-test`, which turns what the engineer changed into that
-   line). Both sides run at once, each in its own compose project, so a
-   round takes ~(warmup + duration + drain + 2 min); `parallel: false` /
-   `--sequential` doubles it. Run it in the background with output to a
-   file and wait — do not poll. Exit 3 means the gate failed.
+   line). `--b-src .` builds the image under test from the agent checkout
+   (`source:`) instead of a CI image — the working tree, uncommitted
+   changes included — and `--a-src main` builds the control the same way,
+   so only the branch is between the sides (README: "Building the
+   candidate from your checkout"; `aoc build` on its own). Both sides run
+   at once, each in its own compose project, so a round takes ~(warmup +
+   duration + drain + 2 min), plus ~1 min per build after the first;
+   `parallel: false` / `--sequential` doubles it. Run it in the background
+   with output to a file and wait — do not poll. Exit 3 means the gate
+   failed.
 3. **Read** `results/<name>/findings.md` (skill: `investigate`). It is the
    whole brief: the verdict line, the signals table (signal, metric, a, b,
    Δ, threshold), the gate line, what we tested, one section per regressed
@@ -67,6 +73,7 @@ headline.
 | the agent's log | `grep -c '| ERROR |' results/<name>/<side>/agent.log`; the brief already lists the top messages | `cat agent.log` (thousands of lines) |
 | every metric, not just the signals | `results/<name>/compare.md` | |
 | identities, windows, focus, notebook URL | `results/<name>/ab.json` | |
+| what a built side came from (commit, dirty files, base) | `jq '.sides[].build' results/<name>/ab.json`; the build's output is `results/<name>/build-<side>.log` (`tail`, never `cat`) | |
 | a chart or flame graph | the notebook URL in `ab.json`, or the MCP | constructing profiler URLs by hand |
 
 ## Commands
@@ -78,6 +85,8 @@ make vet                       # go vet + gofmt check
 ./bin/aoc ab --b IMAGE [--a IMAGE] [--workload NAME|PATH] [--focus TEXT] [--code PKG]...
               [--watch METRIC]... [--b-env K=V]... [--env K=V]...
               [--runs N] [--name NAME] [--duration D] [--sequential] [--plan]
+./bin/aoc ab --b-src .|REF [--a-src REF] …               # build a side from the checkout instead of pulling it
+./bin/aoc build [--src .|REF] [--base IMAGE]              # just the image: aoc/agent-dev:<branch>[-dirty]
 ./bin/aoc ab --only b | --compare-only        # re-run b and reuse a; re-render from disk
 ./bin/aoc conclude --results results/<name> "text" [--verdict pass|fail|inconclusive]
 ./bin/aoc profiles                                         # the workloads and what they stress
@@ -117,7 +126,8 @@ created with the MCP's `create_datadog_notebook`.
 
 | path | what |
 |---|---|
-| `internal/cli/ab.go`, `run.go`, `collect.go`, `conclude.go` | the commands; `executeRun` drives compose, measures, collects profiles/log |
+| `internal/cli/ab.go`, `run.go`, `collect.go`, `conclude.go`, `build.go` | the commands; `executeRun` drives compose, measures, collects profiles/log |
+| `internal/agentbuild/` | `aoc build` / `--b-src`: a scratch worktree of the checkout, the release's embedded Python extracted, the agent compiled in `datadog/agent-dev-env-linux` against it, the result layered on the release |
 | `internal/intake/` | the fake intake: ledgers, latency, `observe.go`/`procs.go` (docker stats, per-process top, telemetry scrape), `profiles.go` (profile tee), `emit.go` (`aoc.*` metrics) |
 | `internal/report/` | `report.json` schema, `compare.go` (metric table, signal rows, per-process/profile tables) |
 | `internal/prof/` | pprof merge/aggregate/diff (google/pprof) |

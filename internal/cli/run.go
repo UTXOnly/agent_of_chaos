@@ -127,6 +127,7 @@ type agentSpec struct {
 	Image string
 	Pull  string // compose pull_policy: always | missing | never (empty = compose default)
 	Env   map[string]string
+	Build *report.Build // set when aoc built the image from a checkout
 }
 
 // overrideCompose renders the compose override that applies the profile and
@@ -405,6 +406,9 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 	if digest != "" {
 		logf("agent image %s = %s", s.agent.Image, digest)
 	}
+	if s.agent.Build != nil {
+		logf("agent image %s was built from %s at %s", s.agent.Image, s.agent.Build.Source, report.ShortDigest(s.agent.Build.Commit))
+	}
 
 	if err := c.run(ctx, append([]string{"up", "-d", "--no-build"}, enabled...)...); err != nil {
 		if ctx.Err() != nil {
@@ -495,6 +499,11 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		return nil, err
 	}
 	r.Agent.ImageID, r.Agent.Digest = imageID, digest
+	if s.agent.Build != nil {
+		// The build knows its commit even when the profiler does not
+		// report it (no uploads over the window).
+		r.Agent.Build, r.Agent.Commit = s.agent.Build, s.agent.Build.Commit
+	}
 	if hadFaults && r.Delivery.Missing > 0 {
 		r.Notes = append(r.Notes, fmt.Sprintf("%s records were still missing when the %s drain ended. Faults were injected during the window and the agent retries with exponential backoff (up to minutes), so these may still have been buffered in the agent rather than lost; use a longer `drain` to tell the two apart.", fmtInt(r.Delivery.Missing), p.Drain))
 	}
@@ -511,8 +520,13 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 	default:
 		r.Profiles = prof.Summaries(caps, 40)
 		// The profiler tags the build it runs in: the exact commit behind
-		// each side, for the code section of the brief.
-		r.Agent.Commit, r.Agent.Repo = profileTag(caps, "git.commit.sha"), profileTag(caps, "git.repository_url")
+		// each side, for the code section of the brief. Not for an image
+		// aoc built: that keeps the release's trace-agent, whose profile
+		// proxy stamps the release's commit, and the build knows its own.
+		if c := profileTag(caps, "git.commit.sha"); c != "" && s.agent.Build == nil {
+			r.Agent.Commit = c
+		}
+		r.Agent.Repo = profileTag(caps, "git.repository_url")
 		note := ""
 		if pst.ForwardErrors > 0 {
 			note = fmt.Sprintf("; %d forward error(s), last: %s", pst.ForwardErrors, pst.LastError)

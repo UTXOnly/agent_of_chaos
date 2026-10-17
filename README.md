@@ -109,15 +109,17 @@ aoc conclude --results results/<name> --verdict pass "…"  # → conclusion.md,
 
 | flag | what |
 |---|---|
-| `--b IMAGE` | the build under test (required, unless the config pins `b.image`) |
+| `--b IMAGE` | the build under test (required, unless the config pins `b.image` — or `--b-src` builds it) |
+| `--b-src REF\|.` | build it from your checkout instead: `.` is the working tree, uncommitted changes included; anything else a git ref ([below](#building-the-candidate-from-your-checkout)) |
 | `--a IMAGE` | the control (default `datadog/agent:7`, or the config's `a.image`) |
+| `--a-src REF` | build the control from the checkout too — `main`, typically — so only your branch is between the sides |
 | `--workload NAME\|PATH` | the workload both sides run: a name in `profiles/`, or a path |
 | `--focus TEXT` | the question this test answers: it opens the brief and names the notebook |
 | `--code PKG` | a package under test; the brief shows movers there first (repeatable, commas allowed) |
 | `--watch METRIC` | a `compare.md` metric to promote to the headline (repeatable) |
 | `--b-env K=V` | a setting only the build under test gets — the feature flag (repeatable) |
 | `--env K=V` | a setting both sides get (repeatable) |
-| `--name`, `--runs`, `--duration`, `--threshold` | the experiment's name, rounds per side, the measured window, the percent that counts as a finding |
+| `--name`, `--runs`, `--duration`, `--threshold` | the experiment's name (default `<b tag>-<workload>`; a built side's tag is its branch), rounds per side, the measured window, the percent that counts as a finding |
 | `--sequential`, `--only a\|b`, `--plan`, `--compare-only`, `--config` | run the sides one after the other, one side, validate only, re-render from disk, another settings file |
 
 The terminal ends with what differed and the one-sentence reading per
@@ -161,6 +163,42 @@ around line 364, and the conclusion — what the difference is, where, and what
 to change — goes on top of the brief and the notebook with `aoc conclude`.
 (The earlier 40-second smoke had reported "+162 % container memory" for the
 same build; it was this page cache.)
+
+### Building the candidate from your checkout
+
+There is no need to wait for CI's `datadog/agent-dev:<branch>-py3`: `aoc
+ab --b-src .` builds the image under test from the agent checkout
+(`source:` in `aoc.yaml`, `DATADOG_AGENT_SRC`, or `../datadog-agent`),
+working tree as it is — uncommitted changes included — and `--a-src main`
+builds the control the same way, so the only difference between the sides
+is your branch rather than "main vs the last release".
+
+```bash
+aoc ab --b-src . --focus "does the new batching cost CPU?"      # your tree vs datadog/agent:7
+aoc ab --b-src . --a-src main --code pkg/logs/sender             # your tree vs main, built alike
+aoc build --src my-branch                                        # just the image: aoc/agent-dev:my-branch
+```
+
+It does what the agent's own `dda inv agent.hacky-dev-image-build` does,
+but inside the agent's Linux developer image
+(`datadog/agent-dev-env-linux`), so it works from a Mac with nothing but
+Docker and git: the Go agent and the rtloader are compiled against the
+embedded Python of the release image and layered on that image. Everything
+else is the release's — the embedded Python, **the integrations** (the
+Python checks load and run exactly as in `datadog/agent:7`), the base OS.
+The image is `aoc/agent-dev:<branch>[-dirty]`, labelled with the commit and
+the base's digest; `pull: never` is set for it. The build takes a few
+minutes the first time (the dev-env image is 3 GB, Bazel and the Go
+modules come down once) and about a minute after that: the scratch
+worktrees (linked worktrees of your checkout, so `git worktree list` shows
+them) live under `~/.cache/aoc/agent-build/` and the Go build cache in the
+`aoc-agent-build-cache` docker volume, so rebuilds are incremental; delete
+the directory, the volume and `git worktree prune` to start over. Nothing
+in the checkout itself is touched. The build's output goes to
+`results/<name>/build-<side>.log`; the record (commit, base, what
+`agent version` printed) is in `ab.json` and each run's `report.json`. The
+brief's code section knows a working-tree build and measures "changed
+a → b" against the tree, uncommitted edits included.
 
 ### For coding agents
 

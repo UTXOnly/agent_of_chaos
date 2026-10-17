@@ -147,6 +147,17 @@ a:
   #
   image: datadog/agent:7
 
+  ## @param src - string - optional
+  ## Build this side from the agent checkout (`source` below) instead of
+  ## pulling `image`: a git ref (main, a branch, a commit), or `.` for the
+  ## checkout's working tree as it is, uncommitted changes included. aoc
+  ## compiles the agent and rtloader in the agent's Linux dev-env container
+  ## and layers them on `build.base`, the release image, whose embedded
+  ## Python and integrations it keeps. Usually from `aoc ab --a-src main`,
+  ## so only the branch is between the two sides.
+  #
+  # src: main
+
   ## @param name - string - optional - default: a
   ## The side's label in tables, charts and the variant:<name> tag.
   #
@@ -170,12 +181,18 @@ a:
 ## while. One of the two must give an image.
 #
 # b:
-#   ## @param image - string - required
+#   ## @param image - string - required unless src is set
 #   ## The candidate: a CI build of a branch (datadog/agent-dev:<branch>-py3),
 #   ## the tip of master (datadog/agent-dev:master-py3), or something you built
 #   ## (then `pull: never`).
 #   #
 #   image: datadog/agent-dev:master-py3
+#
+#   ## @param src - string - optional
+#   ## Or build it from the checkout: `.` is the working tree with its
+#   ## uncommitted changes, anything else a git ref. Usually `aoc ab --b-src .`.
+#   #
+#   # src: .
 #
 #   # name: candidate
 #   # pull: always
@@ -194,16 +211,40 @@ a:
 #   DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: "false"
 #   DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"
 
+## @param build - mapping - optional
+## How a side with `src` is built (`aoc build` does the same on its own).
+## The Go binary and rtloader are compiled in `builder`, the agent's Linux
+## developer image, against the embedded Python of `base`, then layered on
+## `base` — so the image is the release with only the Go code replaced.
+## Scratch worktrees and caches live under ~/.cache/aoc/agent-build
+## (AOC_BUILD_CACHE); the Go build cache is a docker volume,
+## aoc-agent-build-cache, so rebuilds are incremental.
+#
+# build:
+#   ## @param base - string - optional - default: a.image, or datadog/agent:7 when a has src too
+#   ## The release the build sits on. With `pull: always` on a it is re-pulled
+#   ## first, so the base is the control's exact image.
+#   #
+#   # base: datadog/agent:7
+#
+#   ## @param builder - string - optional - default: datadog/agent-dev-env-linux
+#   ## The image the build runs in. It tracks main's toolchain; pin a tag if a
+#   ## branch needs an older one.
+#   #
+#   # builder: datadog/agent-dev-env-linux
+
 ##################################
 ## The code
 ##################################
 
 ## @param source - string - optional - default: $DATADOG_AGENT_SRC, else ../datadog-agent
-## A checkout of the agent's repository. The profiler tags every upload
-## with the build's commit, so with a checkout that has both commits the
-## brief can say, for each function the profiles flagged, whether its file
-## changed between the two builds — and the investigation can open it
-## (`git -C <source> show <commit>:<file>`).
+## A checkout of the agent's repository: what `src` sides are built from,
+## and what the brief reads. The profiler tags every upload with the
+## build's commit, so with a checkout that has both commits the brief can
+## say, for each function the profiles flagged, whether its file changed
+## between the two builds — and the investigation can open it
+## (`git -C <source> show <commit>:<file>`). For a side built from the
+## working tree, the changes are measured against that tree.
 #
 # source: ~/src/datadog-agent
 

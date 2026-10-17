@@ -53,6 +53,26 @@ type Agent struct {
 	Repo      string           `json:"repo,omitempty"`      // git.repository_url from the same tags
 	Container string           `json:"container,omitempty"` // docker container name observed for CPU/memory
 	Hostname  string           `json:"hostname,omitempty"`  // most common hostname in received logs
+	Build     *Build           `json:"build,omitempty"`     // set when aoc built the image from a checkout
+}
+
+// Build records an image aoc built from a checkout (aoc ab --b-src, aoc
+// build): the agent binary and rtloader compiled from Source at Commit —
+// plus the working tree's uncommitted changes when Dirty is set — layered
+// on the release image Base, whose embedded Python and integrations it
+// keeps.
+type Build struct {
+	Image   string  `json:"image"`
+	ImageID string  `json:"image_id,omitempty"`
+	Source  string  `json:"source"`            // the checkout
+	Ref     string  `json:"ref"`               // what was asked for: a git ref, or . for the working tree
+	Branch  string  `json:"branch,omitempty"`  // the branch Ref resolved to, when it is one
+	Commit  string  `json:"commit"`            // the commit built (HEAD, for the working tree)
+	Dirty   int     `json:"dirty,omitempty"`   // working-tree builds: files changed or added on top of Commit
+	Base    string  `json:"base"`              // the release image the build sits on
+	BaseID  string  `json:"base_id,omitempty"` // its docker image ID at build time
+	Version string  `json:"version,omitempty"` // what `agent version` printed in the built image
+	Seconds float64 `json:"seconds,omitempty"` // build wall time
 }
 
 // Generator summarizes one generator process over the window.

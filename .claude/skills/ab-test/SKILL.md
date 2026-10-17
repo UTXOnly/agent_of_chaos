@@ -26,9 +26,19 @@ command line, run it, and read the brief.
   --workload rotation-churn --code pkg/logs/tailers --code pkg/logs/launchers
 ```
 
+> "I changed the sender's batching in my checkout, is it slower?"
+
+```bash
+./bin/aoc ab --b-src . --a-src main \
+  --focus "I changed the sender's batching in my checkout, is it slower?" \
+  --code comp/logs-library/sender
+```
+
 | flag | when |
 |---|---|
-| `--b IMAGE` | always: the build under test. A CI build of a branch is `datadog/agent-dev:<branch>-py3` |
+| `--b IMAGE` | the build under test is an image. A CI build of a branch is `datadog/agent-dev:<branch>-py3` |
+| `--b-src .` | the build under test is their checkout — "my changes", "my branch", "what I have locally", no CI image named. `.` is the working tree, uncommitted changes included; a ref (`my-branch`, a commit) builds that instead. One of `--b` / `--b-src`, never both |
+| `--a-src main` | with `--b-src`, whenever the question is about their change rather than about main: both sides are then built the same way and only the branch differs. Without it the control is the release image the build sits on |
 | `--a IMAGE` | only to compare two named versions; the default control is `datadog/agent:7`, the latest release |
 | `--focus TEXT` | whenever they said why: their sentence, verbatim. It becomes the notebook title |
 | `--workload NAME` | from the table below — a name in `profiles/`, or a path |
@@ -66,7 +76,23 @@ a smoke that proves the images pull and the stack comes up).
 
 `--plan` validates and prints the plan without running anything. Use it
 whenever you had to guess; it also warns when one image is `-full` or
-`-jmx` and the other is not, which moves memory and CPU on its own.
+`-jmx` and the other is not, which moves memory and CPU on its own. With
+`--b-src` it shows the checkout, the branch, the commit and how many
+uncommitted files the build will include — check that against what they
+said they changed.
+
+### Building from the checkout
+
+`--b-src` / `--a-src` compile the agent from the checkout (`source:` in
+`aoc.yaml`, `DATADOG_AGENT_SRC`, else `../datadog-agent`) inside the
+agent's Linux dev-env image and layer it on the release image, whose
+embedded Python and integrations it keeps — the Python checks work. The
+image is `aoc/agent-dev:<branch>[-dirty]`, so the experiment defaults to
+`<branch>[-dirty]-<workload>`. The first build pulls a 3 GB builder image
+and takes several minutes; later ones take about a minute. The build's
+output is `results/<name>/build-<side>.log` — `tail -30` it when a build
+fails, never `cat` it. `./bin/aoc build --src .` builds the image on its
+own and prints its tag.
 
 ## 2. Run it
 
@@ -106,7 +132,8 @@ trace-agent — say so, and expect the profile and code sections to be empty.
 
 ## Variations
 
-- `--only b` after rebuilding the dev image: re-runs b, reuses a.
+- `--only b` after rebuilding the dev image: re-runs b, reuses a. With
+  `--b-src .` it rebuilds b from the tree as it now is first.
 - `--compare-only` re-renders the brief and the notebook from disk, after
   a change to `thresholds`, `--watch` or `--code`.
 - `--sequential` when the host cannot carry both stacks at once.

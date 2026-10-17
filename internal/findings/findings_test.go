@@ -405,6 +405,52 @@ func TestCodeSectionAndScoping(t *testing.T) {
 	if next := strings.Join(res.Sections[0].Next, " "); !strings.Contains(next, `frameRegexFilter="sender\.\(\*Sender\)\.run"`) {
 		t.Errorf("next: %s", next)
 	}
+	// b built by aoc from the working tree: the tree is at shaB plus an
+	// uncommitted edit to the sender, and the checkout is still there, so
+	// changes are measured against the tree — and the build's commit
+	// stands in for the profiler's.
+	os.WriteFile(filepath.Join(src, "pkg", "logs", "sender", "sender.go"), []byte("package sender\n\n// changed\n// and again, uncommitted\n"), 0o644)
+	b.Agent.Commit = ""
+	b.Agent.Build = &report.Build{Image: "aoc/agent-dev:dev-dirty", Source: src, Ref: ".", Branch: "dev", Commit: shaB, Dirty: 1, Base: "datadog/agent:7"}
+	in.Cols = columns(a, b)
+	res = Build(in)
+	byFn = map[string]CodeRow{}
+	for _, r := range res.Code {
+		byFn[r.Function] = r
+	}
+	if snd := byFn["sender.(*Sender).run"]; snd.Change != "+3/−0" {
+		t.Errorf("working-tree sender row: %+v", snd)
+	}
+	if keep := byFn["tagfilter.(*Scoped).Keep"]; keep.Change != "new in b" {
+		t.Errorf("working-tree keep row: %+v", keep)
+	}
+	if !strings.Contains(res.CodeNote, "dev at `"+shaB[:8]+"`") || !strings.Contains(res.CodeNote, "dev is the working tree of `"+src+"` — its commit plus 1 file uncommitted") {
+		t.Errorf("working-tree code note: %s", res.CodeNote)
+	}
+	if !strings.Contains(res.Tested, "dev was built by aoc from `"+src+"`, `dev` ("+shaB[:8]+") plus 1 file uncommitted") {
+		t.Errorf("tested: %s", res.Tested)
+	}
+	// Once the checkout moves on, the tree no longer stands for the build:
+	// back to the commits.
+	run("add", ".")
+	run("commit", "-q", "-m", "c")
+	res = Build(in)
+	if snd := byFn["sender.(*Sender).run"]; snd.Change != "+3/−0" {
+		t.Errorf("sender row before the commit: %+v", snd)
+	}
+	for _, r := range res.Code {
+		if r.Function == "sender.(*Sender).run" && r.Change != "+2/−0" {
+			t.Errorf("after the checkout moved on: %+v", r)
+		}
+	}
+	if strings.Contains(res.CodeNote, "working tree") {
+		t.Errorf("code note after the checkout moved on: %s", res.CodeNote)
+	}
+	b.Agent.Build = nil
+	b.Agent.Commit = shaB
+	run("reset", "-q", "--hard", shaB)
+	in.Cols = columns(a, b)
+
 	// Without a checkout the rows still locate the code, without change status.
 	in.Source = ""
 	res = Build(in)
