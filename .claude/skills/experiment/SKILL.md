@@ -1,6 +1,6 @@
 ---
 name: experiment
-description: Turn "what happens to the agent when …" into an aoc run. Pick the workload (steady, max throughput, rotation storms, crashing writers, multiline floods, spikes, tag-heavy fleets), tune it with --set, add an intake fault with --fault (latency, dropped connections, 429/5xx, outage, slow uplink), run it, and report what the agent lost, duplicated or slowed down. Use when someone wants to put one agent through a situation; comparing two builds is the ab-test skill.
+description: Turn "what happens to the agent when …" into an aoc run. Pick the workload (steady, max throughput, rotation storms, crashing writers, multiline floods, spikes, tag-heavy fleets), tune it with --set, add an intake fault with --fault (latency, dropped connections, 429/5xx, outage, slow uplink), run it, and report what the agent lost, duplicated or slowed down; or sweep one knob ("where is the knee", "how fast can it go here") one run at a time until delivery drops or a component saturates. Use when someone wants to put one agent through a situation or find its limit; comparing two builds is the ab-test skill.
 ---
 
 # Run a situation
@@ -104,3 +104,44 @@ Single values: `jq '.delivery' results/<name>/report.json`,
 If records were lost under a 429/5xx/drop/latency fault, check the notes
 in `report.md` before calling it loss: the agent may still have been
 retrying when the drain ended, and a longer `drain:` tells the two apart.
+
+## Sweeps: raise a knob until something gives
+
+"Where is the knee", "how fast can it go here", "how many containers
+before it falls behind" is a sweep: one `aoc run` per value, read after
+each, stop when something gives. Bounded: at most four runs, 2 min
+windows, one knob.
+
+| the knob | `--set` | the first value |
+|---|---|---|
+| lines per second | `rate=…` | the profile's rate |
+| files per host | `streams=…` | the profile's streams |
+| containers | `app.replicas=…` (tag-heavy-fleet) | 15 |
+| stack traces | `multiline-rate=…` | 0.05 |
+| line size | `wide-line-rate=… wide-line-bytes=…` | 0.06 / 4096 |
+| the intake's bandwidth | `--fault read_bps=…` | 2000000 |
+
+```bash
+./bin/aoc run --profile high-throughput --set rate=100000 --duration 2m --name knee-100k
+./bin/aoc run --profile high-throughput --set rate=150000 --duration 2m --name knee-150k
+./bin/aoc compare results/knee-100k results/knee-150k
+```
+
+Name each run `<base>-<value>`. After each one read two numbers:
+
+```bash
+jq '.delivery.ratio' results/<name>/report.json
+jq '.telemetry[] | select(.name=="logs_component_utilization__ratio") | {labels, last}' results/<name>/report.json
+```
+
+Stop when delivery drops under 99.9 % while the generators held their
+rate (the `aoc.gen.records_per_sec` line in the report is flat), or when
+a component sits at 1.0. Step up by half the previous step from there if
+they want the value narrowed; otherwise report the bracket. The finding
+is the saturation point and the component that pinned first, with the
+core agent's CPU there; the loss past it is the generator outrunning the
+agent, not a bug, and says nothing on its own.
+
+A sweep across two builds is one `aoc ab` per value with `--name
+<base>-<value>`, each judged on saturation and throughput; propose that
+only after the single-agent sweep has found the bracket.
