@@ -114,11 +114,11 @@ func TestMemoryRegressionAndBrief(t *testing.T) {
 		"| memory | core agent RSS max | 250.0 MB | 320.0 MB | **+28.0%** | ±10% |",
 		"| signal | metric | release | dev | Δ | threshold |",
 		"Throughput: held by the generators at 10.0k/s and both sides kept up, so saturation carries the signal.",
-		"Delivery gate: pass — nothing lost, duplicated, orphaned or truncated in dev. Delivery ratio 100.00% → 100.00%.",
+		"Delivery gate: pass. Nothing lost, duplicated, orphaned or truncated in dev. Delivery ratio 100.00% → 100.00%.",
 		"## Tested\n\n| side | image | version | commit | only this side |",
 		"| release | `datadog/agent:7` | 7.83.2 | – | – |",
 		"| dev | `datadog/agent:7` | 7.83.2 | – | `DD_X=1` |",
-		"Workload `baseline` (steady mix) — 16 streams at 10.0k/s, 10m00s window, 1 round per side.",
+		"Workload `baseline` (steady mix): 16 streams at 10.0k/s, 10m00s window, 1 round per side.",
 		"## Where\n\n### Memory\n\nThe core agent's Go heap grew",
 		"Next: `explore_profiling_flame_graph`",
 		"Every metric, the process table and the telemetry counters: `compare.md`.",
@@ -164,7 +164,7 @@ func TestGateFails(t *testing.T) {
 	if res.Gate.Pass {
 		t.Fatal("the gate should fail when records are lost")
 	}
-	for _, want := range []string{"1,200 lost / missing in dev", "3 duplicates in dev (2 in release too — the workload or the harness, not the build)"} {
+	for _, want := range []string{"1,200 lost / missing in dev", "3 duplicates in dev (2 in release too: the workload or the harness, not the build)"} {
 		if !strings.Contains(res.Gate.Line, want) {
 			t.Errorf("gate line missing %q:\n%s", want, res.Gate.Line)
 		}
@@ -424,7 +424,7 @@ func TestCodeSectionAndScoping(t *testing.T) {
 	if keep := byFn["tagfilter.(*Scoped).Keep"]; keep.Change != "new in b" {
 		t.Errorf("working-tree keep row: %+v", keep)
 	}
-	if !strings.Contains(res.CodeNote, "dev at `"+shaB[:8]+"`") || !strings.Contains(res.CodeNote, "dev is the working tree of `"+src+"` — its commit plus 1 file uncommitted") {
+	if !strings.Contains(res.CodeNote, "dev at `"+shaB[:8]+"`") || !strings.Contains(res.CodeNote, "dev is the working tree of `"+src+"` (its commit plus 1 file uncommitted)") {
 		t.Errorf("working-tree code note: %s", res.CodeNote)
 	}
 	if !strings.Contains(res.Tested, "dev was built by aoc from `"+src+"`, `dev` ("+shaB[:8]+") plus 1 file uncommitted") {

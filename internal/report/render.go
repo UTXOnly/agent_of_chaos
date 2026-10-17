@@ -234,7 +234,7 @@ func Markdown(r *Report) string {
 	if len(r.Faults) > 0 {
 		p("\n## Faults\n\n")
 		for _, f := range r.Faults {
-			p("- %s — %s\n", f.At.UTC().Format("15:04:05"), f.Desc)
+			p("- %s: %s\n", f.At.UTC().Format("15:04:05"), f.Desc)
 		}
 	}
 
@@ -305,7 +305,7 @@ func Summary(r *Report) string {
 		verdict = fmt.Sprintf("nothing lost, but %s duplicates", fmtutil.Int(d.Duplicates))
 	}
 	if !d.AllFinal && d.Missing > 0 {
-		verdict += " — generators were still running, so some of this may be in flight"
+		verdict += " (generators were still running, so some of this may be in flight)"
 	}
 	p("### Delivery: %s\n\n", verdict)
 	p("| | |\n|---|---|\n")
@@ -325,7 +325,7 @@ func Summary(r *Report) string {
 	if len(r.Faults) > 0 {
 		p("\n**Faults**\n\n")
 		for _, f := range r.Faults {
-			p("- %s — %s\n", f.At.UTC().Format("15:04:05"), f.Desc)
+			p("- %s: %s\n", f.At.UTC().Format("15:04:05"), f.Desc)
 		}
 	}
 	for _, n := range r.Notes {

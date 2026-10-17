@@ -172,6 +172,13 @@ func (c *Conductor) Run(ctx context.Context) (*Report, error) {
 			return nil, fmt.Errorf("log dir: %w", err)
 		}
 	}
+	if cfg.StartDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(cfg.StartDelay):
+		}
+	}
 	c.startedAt = time.Now()
 	c.banner()
 

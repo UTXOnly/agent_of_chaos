@@ -37,7 +37,7 @@ func TestBuildSpecBase(t *testing.T) {
 }
 
 func TestLoadABConfigSrc(t *testing.T) {
-	prof := writeTemp(t, "baseline.yaml", "duration: 2m\ngenerators:\n  gen-plain: { streams: 4, rate: 100 }\n")
+	prof := writeTemp(t, "baseline.yaml", "duration: 2m\ngenerators:\n  plain: { streams: 4, rate: 100 }\n")
 	cfgPath := writeTemp(t, "aoc.yaml", "profile: "+prof+"\na:\n  src: main\nb:\n  src: .\nbuild:\n  base: datadog/agent:7.83.2\n")
 	c, err := loadABConfig(cfgPath)
 	if err != nil {

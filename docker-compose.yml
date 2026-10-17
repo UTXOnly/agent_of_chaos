@@ -1,62 +1,21 @@
-# agent_of_chaos harness: fake Datadog logs intake + the Agent under test +
-# log generators. Logs go to the intake (never to Datadog); the intake
-# submits the harness's measurements to Datadog as aoc.* metrics and events,
-# and the agent ships its own metrics/profiles as usual, all tagged
-# run:<AOC_RUN_NAME>, so every run is a shareable record in Datadog.
+# The stack `aoc run` and `aoc ab` drive: the fake logs intake and the
+# agent under test. The log generators are not here; aoc renders one
+# service per generator from the workload profile into a compose override
+# next to the results (results/<run>/compose.override.yml), so a workload
+# is a YAML file and nothing else.
 #
-#   cp .env.example .env                    # DD_API_KEY (required), DD_APP_KEY for notebooks
-#   docker compose up -d --build            # intake + agent + gen-plain + gen-json
-#   aoc report --intake http://localhost:8282 --out results/my-run
-#   aoc notebook --results results/my-run   # Datadog notebook for the run
-#   docker compose down -v                  # -v: also drop the log volume for a clean next run
+# The intake and the agent share a network namespace: the agent sends logs
+# to localhost:8282, and the intake scrapes the agent's localhost-only
+# telemetry on :5000. The logs go to the intake, never to Datadog; the
+# intake's aoc.* metrics and events and the agent's own metrics and
+# profiles go to Datadog, tagged run:<name>.
 #
-# Tunables (put them in .env or on the command line):
-#   DD_AGENT_IMAGE=datadog/agent-dev:my-build   agent image under test
-#   AOC_RUN_NAME=my-run                          run tag on every metric/event (aoc run sets it)
-#   AOC_RATE=20000 AOC_STREAMS=16               per-generator workload
-#   docker compose --profile stdout up -d        add a generator that logs to stdout (docker log driver path)
-#   docker compose up -d --scale gen-plain=4     more generator containers
-#   AOC_PROFILE_FORWARD=off                      keep the agent's profile uploads local, do not forward to Datadog
-#   AOC_STACK=aoc-b AOC_INTAKE_PORT=8283 AOC_TCP_PORT=10517 docker compose -p aoc-b up -d
-#                                                a second, independent stack beside the first (aoc ab runs
-#                                                both sides this way, alongside each other)
-#   -f docker-compose.offline.yml               no API key: metrics swallowed by the intake, nothing leaves the host
-#
-# `aoc run --profile profiles/<name>.yaml` drives all of this for you, and
-# `aoc ab` (aoc.yaml) runs it twice — two agent images — and compares.
+# Variables (aoc sets them per run): DD_AGENT_IMAGE, AOC_RUN_NAME,
+# AOC_STACK (a second stack beside the first: aoc ab runs a and b this
+# way), AOC_INTAKE_PORT / AOC_TCP_PORT, AOC_DD_TAGS, DD_TAGS.
+# docker-compose.offline.yml stacks on top when there is no Datadog account.
 
 name: aoc
-
-x-gen: &gen
-  image: agent-of-chaos:latest
-  restart: unless-stopped
-  stop_grace_period: 20s
-  volumes:
-    - aoc-logs:/var/log/agent-of-chaos
-  depends_on:
-    intake:
-      condition: service_healthy
-
-x-gen-env: &gen-env
-  AOC_INTAKE: http://intake:8282
-  AOC_MODE: ${AOC_MODE:-steady}
-  AOC_STREAMS: ${AOC_STREAMS:-8}
-  AOC_RATE: ${AOC_RATE:-2000}
-  AOC_DURATION: ${AOC_DURATION:-0}
-  AOC_ROTATE_BYTES: ${AOC_ROTATE_BYTES:-2MiB}
-  AOC_ROTATE_KEEP: ${AOC_ROTATE_KEEP:-3}
-  AOC_ROTATE_MODE: ${AOC_ROTATE_MODE:-rename}
-  AOC_MULTILINE_RATE: ${AOC_MULTILINE_RATE:-0.05}
-  AOC_WIDE_LINE_RATE: ${AOC_WIDE_LINE_RATE:-0}
-  AOC_WIDE_LINE_BYTES: ${AOC_WIDE_LINE_BYTES:-4096}
-  AOC_PAD_TO: ${AOC_PAD_TO:-0}
-  AOC_BURST_SIZE: ${AOC_BURST_SIZE:-0}
-  AOC_BURST_INTERVAL: ${AOC_BURST_INTERVAL:-5s}
-  AOC_SCENARIO: ${AOC_SCENARIO:-}
-  AOC_SCENARIO_SPEED: ${AOC_SCENARIO_SPEED:-1}
-  AOC_DETERMINISTIC: ${AOC_DETERMINISTIC:-false}
-  AOC_SEED: ${AOC_SEED:-0}
-  AOC_CHAOS_CRASH_RATE: ${AOC_CHAOS_CRASH_RATE:-2}
 
 services:
   intake:
@@ -66,7 +25,7 @@ services:
       args:
         VERSION: ${AOC_VERSION:-dev}
     container_name: ${AOC_STACK:-aoc}-intake
-    # Root only so it can read docker.sock for the agent's container CPU/memory.
+    # Root, to read docker.sock for the agent container's CPU and memory.
     user: "0:0"
     command:
       - intake
@@ -75,9 +34,9 @@ services:
       - --docker-container=${AOC_STACK:-aoc}-agent
       - --agent-image=${DD_AGENT_IMAGE:-datadog/agent:7}
       - --dd-tags=${AOC_DD_TAGS:-harness:aoc}
-      # The agent's profiler uploads arrive here (see DD_APM_PROFILING_DD_URL
-      # below): a copy is kept for the results directory, the upload is
-      # forwarded to Datadog unchanged. off = keep local copies only.
+      # The agent's profiler uploads land here (DD_APM_PROFILING_DD_URL
+      # below): a copy is kept for the results directory and the upload is
+      # forwarded to Datadog unchanged. off keeps the copies only.
       - --profile-forward=${AOC_PROFILE_FORWARD:-auto}
     environment:
       DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env (or use docker-compose.offline.yml)}
@@ -98,9 +57,6 @@ services:
   datadog-agent:
     image: ${DD_AGENT_IMAGE:-datadog/agent:7}
     container_name: ${AOC_STACK:-aoc}-agent
-    # Share the intake's network namespace: the agent reaches the intake at
-    # localhost:8282 and the intake scrapes the agent's localhost-only
-    # telemetry endpoint (:5000). Restarting the intake restarts the agent.
     network_mode: "service:intake"
     pid: host
     depends_on:
@@ -112,42 +68,38 @@ services:
       DD_SITE: ${DD_SITE:-datadoghq.com}
       DD_HOSTNAME: ${DD_HOSTNAME:-${AOC_STACK:-aoc}-harness}
       DD_ENV: ${DD_ENV:-aoc-harness}
-      # run:<name> makes the agent's own metrics/profiles line up with the
-      # intake's aoc.* metrics in the notebook.
+      # run:<name> lines the agent's own metrics and profiles up with the
+      # intake's aoc.* metrics.
       DD_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local} ${DD_TAGS:-}"
       DD_LOGS_ENABLED: "true"
       DD_LOGS_CONFIG_LOGS_DD_URL: http://localhost:8282
       DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
       DD_LOGS_CONFIG_USE_HTTP: "true"
       DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: ${DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL:-true}
-      # Only this stack's generators: another stack's containers (a parallel
-      # A/B side) and whatever else runs on the host are not this agent's
-      # workload. Include rules win over exclude rules.
+      # Only this stack's generators are this agent's workload, not the
+      # other side of an A/B or whatever else runs on the host. Include
+      # rules win over exclude rules.
       DD_CONTAINER_EXCLUDE_LOGS: "name:.*"
       DD_CONTAINER_INCLUDE_LOGS: "name:^${AOC_STACK:-aoc}-gen-"
       DD_LOGS_CONFIG_OPEN_FILES_LIMIT: ${DD_LOGS_CONFIG_OPEN_FILES_LIMIT:-500}
       DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: ${DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION:-false}
       DD_TELEMETRY_ENABLED: "true"
       DD_LOG_LEVEL: ${DD_LOG_LEVEL:-info}
-      # Internal profiles are uploaded through the trace-agent (localhost:8126),
-      # so APM must stay on for profiling to work. DD_APM_ENABLED=false gives
-      # the leanest container if you don't need profiles.
+      # Profiles upload through the trace-agent, so APM stays on.
       DD_APM_ENABLED: ${DD_APM_ENABLED:-true}
       DD_PROCESS_CONFIG_PROCESS_COLLECTION_ENABLED: "false"
       DD_PROCESS_CONFIG_CONTAINER_COLLECTION_ENABLED: "false"
       DD_REMOTE_CONFIGURATION_ENABLED: "false"
-      # The agent's own CPU/heap profiles land in the Continuous Profiler
-      # (service:datadog-agent, host:${DD_HOSTNAME}, tag run:<name>). The
-      # agent's default period is 5 minutes, too coarse for short runs; one
-      # profile per minute with a full-minute CPU sample matches dd-trace-go's
-      # defaults. Anything shorter than the run's last period is not uploaded.
+      # One profile per minute with a full-minute CPU sample (the agent's
+      # default period is 5 minutes, too coarse for a short run). The last
+      # partial period of a run is not uploaded.
       DD_INTERNAL_PROFILING_ENABLED: ${DD_INTERNAL_PROFILING_ENABLED:-true}
       DD_INTERNAL_PROFILING_PERIOD: ${DD_INTERNAL_PROFILING_PERIOD:-60s}
       DD_INTERNAL_PROFILING_CPU_DURATION: ${DD_INTERNAL_PROFILING_CPU_DURATION:-60s}
       DD_INTERNAL_PROFILING_EXTRA_TAGS: "harness:aoc run:${AOC_RUN_NAME:-local} ${DD_TAGS:-}"
-      # The trace-agent proxies those uploads to this URL instead of
-      # intake.profile.<site>: the intake keeps the pprof files for the run
-      # (results/<run>/profiles/) and forwards them to Datadog itself.
+      # The trace-agent proxies profile uploads to the intake instead of
+      # intake.profile.<site>; the intake keeps them for results/<run>/profiles/
+      # and forwards them.
       DD_APM_PROFILING_DD_URL: ${DD_APM_PROFILING_DD_URL:-http://localhost:8282/api/v2/profile}
     volumes:
       - aoc-logs:/var/log/agent-of-chaos:ro
@@ -155,41 +107,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
-      # json-file driver log files, so container logs are tailed as files.
+      # json-file driver logs, so stdout generators are tailed as files.
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       # Tailing offsets survive an agent restart (dropped by `down -v`).
       - aoc-agent-run:/opt/datadog-agent/run
-
-  # Plain-text files: <stream>.log with multi-line stack traces.
-  gen-plain:
-    <<: *gen
-    environment:
-      <<: *gen-env
-      AOC_NAME: plain-{host}
-      AOC_LOG_DIR: /var/log/agent-of-chaos/plain-{host}
-      AOC_FORMAT: plain
-
-  # JSON files: <stream>.json.log, one JSON object per line.
-  gen-json:
-    <<: *gen
-    environment:
-      <<: *gen-env
-      AOC_NAME: json-{host}
-      AOC_LOG_DIR: /var/log/agent-of-chaos/json-{host}
-      AOC_FORMAT: json
-
-  # Opt-in (docker compose --profile stdout up): logs to stdout, collected
-  # through the docker log driver instead of files.
-  gen-stdout:
-    <<: *gen
-    profiles: ["stdout"]
-    environment:
-      <<: *gen-env
-      AOC_NAME: stdout-{host}
-      AOC_OUTPUT: stdout
-      AOC_FORMAT: plain
-    labels:
-      com.datadoghq.ad.logs: '[{"source":"agent-of-chaos","service":"aoc-stdout","log_processing_rules":[{"type":"multi_line","name":"timestamp_start","pattern":"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"}]}]'
 
 volumes:
   aoc-logs:

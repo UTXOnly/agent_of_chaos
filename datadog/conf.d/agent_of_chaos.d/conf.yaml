@@ -1,7 +1,7 @@
-# File-tailing config for the aoc harness (docker-compose.yml) and the
-# tag-filter fleet (docker-compose.tag-filter.yml). Generators write to
-# /var/log/agent-of-chaos/<generator>/<stream>.log (plain) and
-# <stream>.json.log (JSON). Rotated files (*.log.1 …) are not tailed.
+# File tailing for the agent under test. File generators write to
+# /var/log/agent-of-chaos/<generator>/<stream>.log (plain text) and
+# <stream>.json.log (JSON); rotated files (*.log.1 …) are not tailed.
+# Generators on stdout are collected through the docker log driver instead.
 logs:
   - type: file
     path: /var/log/agent-of-chaos/*/*.log

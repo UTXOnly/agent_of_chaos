@@ -40,12 +40,13 @@ var Modes = []string{ModeSteady, ModeRamp, ModeChaos, ModeSpike, ModePulse, Mode
 // Config is the full generator configuration. Zero values are filled in by
 // Default(); Validate() rejects nonsense.
 type Config struct {
-	Name     string        // generator id in the aoc= marker (default: hostname)
-	Mode     string        // see Modes
-	Streams  int           // target stream count (steady/ramp/chaos/spike)
-	Rate     float64       // aggregate lines/s across streams; 0 = unlimited
-	Duration time.Duration // stop after this long; 0 = run forever
-	MaxLines int64         // stop after this many records in total; 0 = no cap
+	Name       string        // generator id in the aoc= marker (default: hostname)
+	Mode       string        // see Modes
+	Streams    int           // target stream count (steady/ramp/chaos/spike)
+	Rate       float64       // aggregate lines/s across streams; 0 = unlimited
+	Duration   time.Duration // stop after this long; 0 = run forever
+	StartDelay time.Duration // wait before the first line (a container log tailer needs a moment to notice a new container)
+	MaxLines   int64         // stop after this many records in total; 0 = no cap
 
 	Format Format
 	Output Output

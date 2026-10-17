@@ -88,7 +88,7 @@ func TestForAB(t *testing.T) {
 	// Without findings: the header, the flame-graph intro and the whole
 	// agent's CPU, then the four signals.
 	want := []string{
-		"markdown: - **release** — agent 7.79.0",
+		"markdown: - **release**: agent 7.79.0",
 		"markdown: ## Flame graphs",
 		"iframe",
 		"timeseries: Received vs generated (records/s)",

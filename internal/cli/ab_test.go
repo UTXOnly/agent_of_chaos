@@ -21,7 +21,7 @@ func writeTemp(t *testing.T, name, content string) string {
 }
 
 func TestLoadABConfigDefaults(t *testing.T) {
-	prof := writeTemp(t, "baseline.yaml", "duration: 2m\ngenerators:\n  gen-plain: { streams: 4, rate: 100 }\n")
+	prof := writeTemp(t, "baseline.yaml", "duration: 2m\ngenerators:\n  plain: { streams: 4, rate: 100 }\n")
 	cfgPath := writeTemp(t, "aoc.yaml", "profile: "+prof+"\nb:\n  image: datadog/agent-dev:my-branch-py3\n  pull: never\n")
 	c, err := loadABConfig(cfgPath)
 	if err != nil {
@@ -36,11 +36,11 @@ func TestLoadABConfigDefaults(t *testing.T) {
 	if c.Runs != 1 || c.Pause.D() != 10*time.Second || c.Results != "results" || c.Threshold != 10 {
 		t.Errorf("defaults: runs=%d pause=%s results=%s threshold=%v", c.Runs, c.Pause, c.Results, c.Threshold)
 	}
-	p, psrc, err := c.workload()
+	p, err := c.workload()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Name != "baseline" || p.Duration.D() != 2*time.Minute || p.Drain.D() != 45*time.Second || len(psrc) == 0 {
+	if p.Name != "baseline" || p.Duration.D() != 2*time.Minute || p.Drain.D() != 45*time.Second {
 		t.Errorf("workload: %+v", p)
 	}
 	runs := c.plan("ab-" + p.Name)
@@ -58,7 +58,7 @@ profile:
   agent:
     env: { DD_LOG_LEVEL: debug }
   generators:
-    gen-plain: { streams: 2, rate: 10 }
+    plain: { streams: 2, rate: 10 }
 duration: 90s
 runs: 2
 env: { DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false" }
@@ -69,15 +69,12 @@ b: { name: candidate, image: datadog/agent-dev:x, env: { DD_LOGS_CONFIG_TAG_FILT
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, src, err := c.workload()
+	p, err := c.workload()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Profile.String() != "inline" || p.Name != "inline" || p.Duration.D() != 90*time.Second || p.Warmup.D() != 5*time.Second {
 		t.Errorf("inline profile: %s %+v", c.Profile, p)
-	}
-	if !strings.Contains(string(src), "gen-plain") {
-		t.Errorf("inline source not kept: %s", src)
 	}
 	if p.Agent.Env["DD_LOG_LEVEL"] != "debug" || p.Agent.Env["DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL"] != "false" {
 		t.Errorf("shared env not merged: %v", p.Agent.Env)
@@ -93,8 +90,11 @@ b: { name: candidate, image: datadog/agent-dev:x, env: { DD_LOGS_CONFIG_TAG_FILT
 		t.Errorf("round 2: %+v", runs[2])
 	}
 	// The candidate's env lands on top of the profile's in the compose override.
-	override, _ := overrideCompose(p, agentSpec{Image: c.B.Image, Pull: c.B.Pull, Env: c.B.Env})
-	for _, s := range []string{`image: "datadog/agent-dev:x"`, "pull_policy: always", `DD_LOG_LEVEL: "debug"`, `DD_LOGS_CONFIG_TAG_FILTERS: "{\"exclude\":[\"env:*\"]}"`, `DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"`} {
+	override, names := overrideCompose(p, agentSpec{Image: c.B.Image, Pull: c.B.Pull, Env: c.B.Env}, "aoc-b")
+	if !reflect.DeepEqual(names, []string{"gen-plain"}) {
+		t.Errorf("services: %v", names)
+	}
+	for _, s := range []string{"image: datadog/agent-dev:x", "pull_policy: always", "DD_LOG_LEVEL: debug", `DD_LOGS_CONFIG_TAG_FILTERS: '{"exclude":["env:*"]}'`, `DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false"`, "container_name: aoc-b-gen-plain", `AOC_STREAMS: "2"`} {
 		if !strings.Contains(override, s) {
 			t.Errorf("override missing %s:\n%s", s, override)
 		}
@@ -255,7 +255,7 @@ func TestPackagingNote(t *testing.T) {
 // The results keep the config as it ran: loading it back must give the
 // same test, so --compare-only and --only work from it.
 func TestEffectiveConfigRoundTrip(t *testing.T) {
-	prof := writeTemp(t, "baseline.yaml", "name: baseline\nduration: 2m\ngenerators:\n  gen-plain: { streams: 4, rate: 100 }\n")
+	prof := writeTemp(t, "baseline.yaml", "name: baseline\nduration: 2m\ngenerators:\n  plain: { streams: 4, rate: 100 }\n")
 	c, err := loadABConfig(writeTemp(t, "aoc.yaml", "a: { image: datadog/agent:7 }\nenv: { DD_LOG_LEVEL: info }\nthresholds: { cpu: 5 }\nruns: 2\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +289,7 @@ func TestEffectiveConfigRoundTrip(t *testing.T) {
 	if got.Name != "log-tag-filtering-9e35a50b-full-baseline" || got.Focus != c.Focus {
 		t.Errorf("name/focus: %q %q", got.Name, got.Focus)
 	}
-	p, _, err := got.workload()
+	p, err := got.workload()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestEffectiveConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("saved inline workload does not load: %v\n%s", err, eff)
 	}
-	ip, _, err := inline.workload()
+	ip, err := inline.workload()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@ tables, a **Next** line) → the profiles → the code. Everything else is in
 
 ## Budget
 
-Local evidence first — one table usually names the cause. Then at most two
+Local evidence first; one table usually names the cause. Then at most two
 Datadog MCP calls per regressed signal, and only the call that signal's
 **Next** line gives, with its filters: load the `datadog/profiling` skill
 before profiling calls and `datadog/metrics` before metric queries, and
@@ -33,7 +33,7 @@ a point of its threshold.
 
 ## The gate
 
-**delivery** — records lost, duplicated, orphaned or truncated on b fail
+**delivery**: records lost, duplicated, orphaned or truncated on b fail
 the run (exit 3); out of order is reported and does not fail. Read the
 delivery ledger, then retries/errors/responses and the faults note. Gaps
 right after a rotation are the tailer: the streams table in
@@ -45,23 +45,23 @@ injected faults against the loss.
 
 ## The four signals
 
-**throughput** — `received logs /s`. Under a paced workload the generator
+**throughput**: `received logs /s`. Under a paced workload the generator
 holds the rate, so this fails only when b fell short of what was
 generated: check the gate and saturation first, they normally explain it.
 Under `deterministic-bytes` (flat out, fixed record budget) it is the
 agent's maximum, and cpu or saturation says why. MCP:
 `get_datadog_metric` `avg:aoc.intake.logs_per_sec{experiment:<name>} by
 {variant}` beside `avg:aoc.gen.records_per_sec{experiment:<name>} by
-{variant}` — a flat generator line under a lower intake line is real.
+{variant}`. A flat generator line under a lower intake line is real.
 
-**saturation** — `pipeline utilization (busiest component)`, the max over
+**saturation**: `pipeline utilization (busiest component)`, the max over
 the agent's `logs_component_utilization` ratio per component. The
 per-component table is the evidence: the component near 1.0 is the
 bottleneck, and its package is where to read the CPU diff. MCP:
 `get_datadog_metric`
 `avg:aoc.agent.telemetry.logs_component_utilization.ratio{experiment:<name>} by {variant,name}`.
 
-**cpu** — `core agent process CPU avg`, `CPU seconds per 1M logs`. The CPU
+**cpu**: `core agent process CPU avg`, `CPU seconds per 1M logs`. The CPU
 diff by function names the mover; the process table takes over when the
 core agent is not the one that grew (a `-full` image's python3 check
 runner, the trace-agent). Seconds per 1M logs up while CPU avg is flat
@@ -70,7 +70,7 @@ means the same work cost more per log, not that there was more of it. MCP:
 queryString and window and `frameRegexFilter` on the mover, then the same
 for a.
 
-**memory** — `core agent RSS max`, `agent container anon mem avg`,
+**memory**: `core agent RSS max`, `agent container anon mem avg`,
 `core agent Go heap in use`. The "Where the memory is" table settles it:
 
 - anon ↑, core RSS flat → another process; the process table names it.
@@ -81,12 +81,12 @@ for a.
 MCP: `explore_profiling_flame_graph` profileType=heap-live-size with that
 function as `frameRegexFilter`, then the same for a; or
 `get_datadog_metric` `avg:aoc.agent.proc.rss_bytes{experiment:<name>} by
-{variant,proc}` — a ramp is a leak, a step is a cache.
+{variant,proc}`. A ramp is a leak, a step is a cache.
 
 ## Into the code
 
 `findings.md` ends with a **Code** table: for every profile mover inside
-the agent's module — the packages under test (`--code`) first — its
+the agent's module, the packages under test (`--code`) first, its
 `file:line` from the profile, a link to that line at the tested commit,
 and, when a checkout with both commits is available (`source:` in
 `aoc.yaml`, `DATADOG_AGENT_SRC`, or `../datadog-agent`), whether the file

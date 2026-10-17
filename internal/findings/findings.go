@@ -265,7 +265,7 @@ func gate(in Input, res *Result) Gate {
 			g.Pass = false
 			s := fmt.Sprintf("%s %s in %s", row.Cells[1], m, in.Cols[1].Name)
 			if a > 0 {
-				s += fmt.Sprintf(" (%s in %s too — the workload or the harness, not the build)", row.Cells[0], in.Cols[0].Name)
+				s += fmt.Sprintf(" (%s in %s too: the workload or the harness, not the build)", row.Cells[0], in.Cols[0].Name)
 			}
 			fails = append(fails, s)
 		case a > 0:
@@ -281,10 +281,10 @@ func gate(in Input, res *Result) Gate {
 	}
 	tail = append(tail, notes...)
 	if g.Pass {
-		g.Line = "Delivery gate: pass — nothing lost, duplicated, orphaned or truncated in " + in.Cols[1].Name
+		g.Line = "Delivery gate: pass. Nothing lost, duplicated, orphaned or truncated in " + in.Cols[1].Name
 	} else {
 		g.Reason = strings.Join(fails, ", ")
-		g.Line = "Delivery gate: fail — " + g.Reason
+		g.Line = "Delivery gate: fail. " + g.Reason
 	}
 	if len(tail) > 0 {
 		g.Line += ". " + upperFirst(strings.Join(tail, "; "))
@@ -527,7 +527,7 @@ func tested(in Input) string {
 	for _, g := range r.Generators {
 		streams += g.ActiveStreams
 	}
-	fmt.Fprintf(&b, "\nWorkload %s — %d streams at %s, %s window, %s per side.\n", work, streams, fmtutil.Rate(r.Throughput.GenRecordsPerSec),
+	fmt.Fprintf(&b, "\nWorkload %s: %d streams at %s, %s window, %s per side.\n", work, streams, fmtutil.Rate(r.Throughput.GenRecordsPerSec),
 		fmtutil.Duration(time.Duration(r.Seconds*float64(time.Second))), plural(len(in.Cols[0].Runs), "round"))
 	if s := dedupe(shared); len(s) > 0 {
 		fmt.Fprintf(&b, "Both sides: %s.\n", strings.Join(s, "; "))
@@ -1165,7 +1165,7 @@ func faultsNote(cols []report.Column) string {
 	for _, c := range cols {
 		for _, r := range c.Runs {
 			for _, f := range r.Faults {
-				fmt.Fprintf(&b, "- `%s` %s — %s\n", r.Name, f.At.UTC().Format("15:04:05"), f.Desc)
+				fmt.Fprintf(&b, "- `%s` %s: %s\n", r.Name, f.At.UTC().Format("15:04:05"), f.Desc)
 			}
 		}
 	}
@@ -1299,9 +1299,9 @@ func codeRows(in Input, res *Result) ([]CodeRow, string) {
 	case !canDiff:
 		note += " The checkout lacks one of the commits (`git fetch` it), so file changes are not shown."
 	case rb.tree:
-		note += fmt.Sprintf(" %s is the working tree of `%s` — its commit plus %s uncommitted — and file changes are measured against that tree.", in.Cols[1].Name, src, plural(b.Agent.Build.Dirty, "file"))
+		note += fmt.Sprintf(" %s is the working tree of `%s` (its commit plus %s uncommitted), and file changes are measured against that tree.", in.Cols[1].Name, src, plural(b.Agent.Build.Dirty, "file"))
 	case ra.tree:
-		note += fmt.Sprintf(" %s is the working tree of `%s` — its commit plus %s uncommitted — and file changes are measured against that tree.", in.Cols[0].Name, src, plural(a.Agent.Build.Dirty, "file"))
+		note += fmt.Sprintf(" %s is the working tree of `%s` (its commit plus %s uncommitted), and file changes are measured against that tree.", in.Cols[0].Name, src, plural(a.Agent.Build.Dirty, "file"))
 	}
 	return rows, note
 }
@@ -1453,7 +1453,7 @@ func nextFor(topic string, in Input, res *Result) []string {
 			fn = " frameRegexFilter=\"" + fn + "\""
 		}
 		return []string{fmt.Sprintf("`explore_profiling_flame_graph` profileType=heap-live-size queryString=\"%s\" %s%s, then the same for `%s`.", scope(b), win(b), fn, scope(a)),
-			fmt.Sprintf("Trend: `get_datadog_metric` `avg:aoc.agent.proc.rss_bytes{experiment:%s} by {variant,proc}` — a ramp is a leak, a step is a cache.", in.Experiment)}
+			fmt.Sprintf("Trend: `get_datadog_metric` `avg:aoc.agent.proc.rss_bytes{experiment:%s} by {variant,proc}`; a ramp is a leak, a step is a cache.", in.Experiment)}
 	case "cpu":
 		fn := topFn("CPU")
 		if fn != "" {
@@ -1554,7 +1554,7 @@ func ProfilesMarkdown(res *Result, in Input) string {
 		if shown[d.Label] || len(rows) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "**%s** — %s → %s (%s)\n\n", d.Label, prof.Format(d.ATotal, d.Unit), prof.Format(d.BTotal, d.Unit), prof.FormatDelta(d.BTotal-d.ATotal, d.Unit))
+		fmt.Fprintf(&b, "**%s**: %s → %s (%s)\n\n", d.Label, prof.Format(d.ATotal, d.Unit), prof.Format(d.BTotal, d.Unit), prof.FormatDelta(d.BTotal-d.ATotal, d.Unit))
 		fmt.Fprintf(&b, "| function (flat) | source | %s | %s | Δ |\n|---|---|---|---|---|\n", in.Cols[0].Name, in.Cols[1].Name)
 		for _, r := range rows {
 			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s |\n", prof.ShortFunc(r.Function), sourceCell(r.File, r.Line, in), prof.Format(r.A, d.Unit), prof.Format(r.B, d.Unit), prof.FormatDelta(r.Delta, d.Unit))
