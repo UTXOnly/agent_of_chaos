@@ -54,6 +54,15 @@ func TestParseProfile(t *testing.T) {
 	if s := p.faultsSummary(); s != "2 steps: HTTP 503 50% at 1m0s, cleared at 1m30s" {
 		t.Errorf("faults: %s", s)
 	}
+	if p.budgeted() {
+		t.Error("sample has no max-lines but is budgeted")
+	}
+	if err := p.set([]string{"plain.max-lines=1000"}); err != nil {
+		t.Fatal(err)
+	}
+	if !p.budgeted() {
+		t.Error("plain.max-lines=1000 is not budgeted")
+	}
 }
 
 func TestParseProfileErrors(t *testing.T) {

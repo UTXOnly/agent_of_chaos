@@ -323,6 +323,17 @@ func (p *Profile) services() []service {
 	return out
 }
 
+// budgeted reports whether a generator stops after a fixed number of
+// records (max-lines), so the window has to be open before it starts.
+func (p *Profile) budgeted() bool {
+	for _, g := range p.Generators {
+		if n, err := strconv.ParseInt(yamlScalar(g.Settings["max-lines"]), 10, 64); err == nil && n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Profile) serviceNames() []string {
 	var names []string
 	for _, s := range p.services() {

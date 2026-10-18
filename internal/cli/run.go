@@ -200,6 +200,33 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		logf("agent image %s was built from %s at %s", s.agent.Image, s.agent.Build.Source, report.ShortDigest(s.agent.Build.Commit))
 	}
 
+	var windowStart time.Time
+	openWindow := func() error {
+		if p.Warmup > 0 {
+			logf("warm-up %s", p.Warmup)
+			if !sleepCtx(ctx, p.Warmup.D()) {
+				return errInterrupted
+			}
+		}
+		if _, err := http.Post(s.intake+"/harness/reset?name="+name, "", nil); err != nil {
+			return fmt.Errorf("reset: %w", err)
+		}
+		windowStart = time.Now()
+		logf("measured window open for %s (metrics tagged run:%s)", p.Duration, name)
+		return nil
+	}
+	// A record budget can be written in well under a second; warming up
+	// on it would leave the whole budget before the window. Warm the agent
+	// up idle and open the window before the generators start.
+	budgeted := p.budgeted()
+	if budgeted {
+		if err := openWindow(); err != nil {
+			if ctx.Err() != nil {
+				return stop()
+			}
+			return nil, err
+		}
+	}
 	if err := c.run(ctx, append([]string{"up", "-d", "--no-build"}, enabled...)...); err != nil {
 		if ctx.Err() != nil {
 			return stop()
@@ -210,19 +237,14 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 	if err := waitGenerators(ctx, s.intake, len(enabled), 60*time.Second, logf); err != nil {
 		logf("warning: %v", err)
 	}
-	if p.Warmup > 0 {
-		logf("warm-up %s", p.Warmup)
-		if !sleepCtx(ctx, p.Warmup.D()) {
-			return stop()
+	if !budgeted {
+		if err := openWindow(); err != nil {
+			if ctx.Err() != nil {
+				return stop()
+			}
+			return nil, err
 		}
 	}
-
-	// Open the measured window.
-	if _, err := http.Post(s.intake+"/harness/reset?name="+name, "", nil); err != nil {
-		return nil, fmt.Errorf("reset: %w", err)
-	}
-	windowStart := time.Now()
-	logf("measured window open for %s (metrics tagged run:%s)", p.Duration, name)
 
 	// Fault timeline, cut off at the end of the window.
 	windowCtx, cancelWindow := context.WithDeadline(ctx, windowStart.Add(p.Duration.D()))
