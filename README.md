@@ -1,254 +1,28 @@
 # agent_of_chaos
 
-A local, agent-driven development loop for the Datadog Agent's logs
-pipeline. You tell Claude Code what you changed or what you want to know;
-it shapes the environment, runs the experiment in Docker, reads the brief,
-tells you what moved and in which function, and proposes the next run.
+`aoc` puts a Datadog Agent in a hard logs situation, counts every record
+that comes out the other end, and tells you what was lost, duplicated,
+slowed down or made more expensive. It runs on a laptop in Docker. It is
+built to be driven by Claude Code: you describe what you changed or what
+you are worried about, Claude picks the workload, runs it, reads the
+brief and proposes the next run. Every run is one command line you can
+also type yourself.
 
-```text
-you:     I rewrote the sender's batching in my checkout. Is it slower behind a slow intake?
-claude:  Building your working tree and main the same way, baseline workload, 500 ms ± 200 ms
-         intake latency, 10 min window, 2 rounds. About 35 minutes. Running in the background.
-         …
-         pass. No signal crossed its threshold. cpu −1.2 %, memory +0.8 %, saturation flat
-         (sender 0.41 → 0.39). The gate is clean: 0 lost, 0 duplicated on both sides.
-         Next I'd run flaky-network, since batching changes usually show under dropped
-         connections rather than plain latency. Want that?
-```
+## What it is
 
-This is not a replacement for CI. The agent's end-to-end suite and its
-single-machine performance tests are the record of truth for a release.
-This is for the hours before you push: a change in your working tree, an
-answer in minutes, and an environment you can bend to the question
-(the workload shape, the intake's faults, the agent's settings, how long
-and how many rounds) without writing a test.
+Three pieces, one compose project per agent under test:
 
-## The loop
-
-```mermaid
-flowchart LR
-    G["You describe the goal<br/>what changed, what you're worried about"] --> P["Claude plans<br/>workload · faults · settings · window · rounds"]
-    P --> R["aoc runs it in Docker<br/>control and candidate side by side"]
-    R --> B["findings.md<br/>gate · four signals · evidence · code"]
-    B --> V{"Claude reads it"}
-    V -->|clean| N["proposes the next shape<br/>or calls it done"]
-    V -->|regressed| I["investigates<br/>local evidence, then ≤ 2 Datadog MCP calls per signal"]
-    I --> C["aoc conclude<br/>what it turned out to be, in the notebook and the event"]
-    N --> G
-    C --> G
-```
-
-Every run is one command line. Claude writes it, so you never have to;
-the line is in the report, so you can rerun it yourself.
-
-## Start
-
-Docker, Go 1.25 or later, and a Datadog API key so metrics, profiles and
-notebooks land in your org (an app key for notebook creation).
-
-```bash
-cp .env.example .env     # DD_API_KEY, optionally DD_APP_KEY
-make build               # ./bin/aoc
-claude                   # in this directory
-```
-
-The repository ships four skills in `.claude/skills/`; Claude picks the
-one your question calls for. `/aoc` starts a session from a goal and
-leads it to a conclusion. The others are what it delegates to:
-
-| skill | when it fires | what it does |
-|---|---|---|
-| `aoc` | "I'm working on …, help me test it", "is my branch ready", "keep going" | turns a goal into a plan of experiments, runs them in order, reads each result and decides the next one |
-| `ab-test` | "test my branch", "did master regress", "flag on vs off" | one `aoc ab` line from what you changed; runs it; reports the verdict |
-| `experiment` | "what happens to the agent when …", "find the knee" | one `aoc run` line from a situation; runs it; reports delivery, latency and cost; sweeps a knob until something gives |
-| `investigate` | "why did memory go up in results/x" | from the brief to a named function, with a bounded number of Datadog MCP calls, then `aoc conclude` |
-
-A session's record is `results/<name>/` on disk and, in Datadog, the
-`aoc.*` metrics, `source:aoc` events, the agent's own profiles and a
-notebook, all tagged `experiment:<name> variant:a|b`.
-
-## What you can ask
-
-These are the questions the loop is built for. Each row is a real prompt,
-the command Claude derives from it, and what comes back.
-
-### Did my change regress the pipeline?
-
-> **I changed the tailer's rotation handling on my branch. Does it lose
-> anything under copytruncate?**
-
-```bash
-./bin/aoc ab --b-src . --a-src main --workload rotation-churn \
-  --code pkg/logs/tailers --code pkg/logs/launchers \
-  --focus "I changed the tailer's rotation handling. Does it lose anything under copytruncate?"
-```
-
-Both sides are built from your checkout the same way, so only the branch
-differs. The gate (lost, duplicated, orphaned, truncated) is the headline;
-the streams table in the brief says which rotation mode lost and where the
-gaps sit relative to rotations. Claude then offers `chaos-restarts`, the
-other tailer workload.
-
-> **Master versus the release: did throughput regress?**
-
-```bash
-./bin/aoc ab --b datadog/agent-dev:master-py3 --workload deterministic-bytes \
-  --focus "master vs release: did throughput regress?"
-```
-
-`deterministic-bytes` feeds both agents byte-identical input flat out, so
-throughput is each agent's maximum and CPU seconds per million logs is
-directly comparable.
-
-> **I moved payload building off the sender's hot path. Is it slower or
-> hungrier behind a slow intake?**
-
-```bash
-./bin/aoc ab --b-src . --a-src main --fault latency_ms=500,jitter_ms=200 \
-  --code comp/logs-library/sender --focus "payload building off the hot path: slower or hungrier behind a slow intake?"
-```
-
-### Is a feature or a setting worth its cost?
-
-> **Is auto multiline detection worth its CPU when a third of the lines are
-> stack traces? Same build, flag on versus off.**
-
-```bash
-./bin/aoc ab --b datadog/agent:7 --workload multiline-heavy \
-  --b-env DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION=true \
-  --focus "is auto multiline detection worth its CPU at 35% stack traces?"
-```
-
-`--b-env` puts the flag on the candidate only. The brief reports orphan
-continuation lines and "multiline received / written" next to the CPU
-signal, so the answer is cost and benefit on one page.
-
-> **Run the tag filter build with every tag key excluded at four times the
-> baseline volume. Does the filter pay for itself?**
-
-```bash
-./bin/aoc ab --a datadog/agent-dev:log-tag-filtering-9e35a50b-full \
-  --b datadog/agent-dev:log-tag-filtering-9e35a50b-full \
-  --workload baseline --set rate=20000 --duration 5m \
-  --b-env 'DD_LOGS_CONFIG_TAG_FILTERS={"exclude":["dirname:*","filename:*","log_format:*","project:*","multiline:*","container_id:*","container_name:*","docker_image:*","image_id:*","image_name:*","image_tag:*","short_image:*"]}' \
-  --watch "tag bytes per log" --code comp/logs-library/tagfilter \
-  --focus "tag filter, every tag key excluded, 4x volume: does it pay for itself?"
-```
-
-Same build on both sides, the flag on one. This one was run from this
-checkout. The brief came back with core agent CPU 34.5 % → 30.9 %, Go
-heap in use 104.9 MB → 88.2 MB, wire bytes −4 % even though the
-compression ratio fell from 21.7× to 17.4×, and named the filter's own
-cost: a per-message `make([]string)` in `tagfilter.(*Scoped).Keep` at
-1.7 MB/s of allocations. The whole session is in
-[docs/sessions.md](docs/sessions.md).
-
-> **zstd versus gzip on the oversized-line workload: what does it do to CPU
-> and bytes on the wire?**
-
-```bash
-./bin/aoc ab --b datadog/agent:7 --workload high-compression \
-  --env DD_LOGS_CONFIG_COMPRESSION_KIND=gzip --b-env DD_LOGS_CONFIG_COMPRESSION_KIND=zstd \
-  --watch "received wire B/s" --watch "compression ratio" \
-  --focus "zstd vs gzip on high-compression: CPU and wire bytes"
-```
-
-### How does the agent react to a workload shape?
-
-> **What happens during a 45 s intake outage followed by throttling? How
-> long to recover, and is anything duplicated?**
-
-```bash
-./bin/aoc run --profile intake-outage --name outage-recovery
-```
-
-The profile already carries the fault timeline (503 to everything from
-45 s to 90 s, then 20 % 429s). The report shows retries and responses by
-status, end-to-end latency through the outage, and the ledger after the
-drain: lost, duplicated, out of order.
-
-> **Where is the knee for the file tailer on this laptop? Raise the rate
-> until delivery drops or a component saturates.**
-
-```bash
-./bin/aoc run --profile high-throughput --set rate=100000 --duration 2m --name knee-100k
-./bin/aoc run --profile high-throughput --set rate=150000 --duration 2m --name knee-150k
-./bin/aoc run --profile high-throughput --set rate=200000 --duration 2m --name knee-200k
-./bin/aoc compare results/knee-100k results/knee-150k results/knee-200k
-```
-
-Claude runs these one at a time, reads delivery and saturation after
-each, and stops when something gives. The sweep is bounded; the report
-names the rate, the component that saturated first, and the CPU at that
-point.
-
-> **Thirty containers on stdout with forty tags each, and the intake reads
-> at 500 kB/s. Does the agent keep up?**
-
-```bash
-./bin/aoc run --profile tag-heavy-fleet --set app.replicas=30 --fault read_bps=500000 --name fleet-slow-uplink
-```
-
-> **Does raising `logs_config.pipelines` above one per CPU help on
-> high-throughput, or just cost memory?**
-
-```bash
-./bin/aoc ab --b datadog/agent:7 --workload high-throughput --b-env DD_LOGS_CONFIG_PIPELINES=16 \
-  --focus "pipelines at 16 on high-throughput: throughput vs memory"
-```
-
-### Why did it come out that way?
-
-> **Memory went up 8 % in `results/sender-batching-flaky-network`. Where?**
-
-Claude reads `findings.md` and starts from the memory section's "where
-the memory is" table: anon versus file-backed, core agent RSS versus Go
-heap in use, the per-process table. That alone usually settles whether it
-is the Go heap, non-Go memory, another process in the container or page
-cache. When it is the heap, the heap diff names the function and the code
-table says whether its file changed between the builds. At most two
-Datadog MCP calls per regressed signal, then:
-
-```bash
-./bin/aoc conclude --results results/sender-batching-flaky-network --verdict fail \
-  "memory +8 %: retry buffers held across the drop window; (*batchStrategy).flush keeps the encoded payload alive until the retry succeeds (sender/batch_strategy.go:142, changed in b)"
-```
-
-The conclusion lands on top of the notebook and as an event next to the
-run's metrics.
-
-## A session, end to end
-
-```mermaid
-sequenceDiagram
-    participant E as Engineer
-    participant C as Claude
-    participant A as aoc
-    participant D as Datadog
-    E->>C: I changed the sender's retry backoff. Is it ready?
-    C->>C: plan: smoke, then intake-outage, then flaky-network
-    C->>A: aoc ab --b-src . --a-src main --runs 1 --duration 2m --plan
-    A-->>C: resolved plan (images, workload, window)
-    C->>A: aoc ab … (background)
-    A->>D: aoc.* metrics, events, profiles, notebook
-    A-->>C: exit 0, results/…/findings.md
-    C-->>E: smoke clean; running intake-outage, 10 min, 2 rounds
-    C->>A: aoc ab --b-src . --a-src main --workload intake-outage --code comp/logs-library/sender
-    A-->>C: exit 3: b duplicated 1,204 records after the 503 window
-    C->>C: reads the gate, the retry table, the events timeline
-    C->>D: search_datadog_events source:aoc run:…-b
-    C-->>E: duplicates begin 2 s after the outage clears; retries overlap the first successful resend
-    E->>C: fixed, rerun b only
-    C->>A: aoc ab --only b
-    A-->>C: pass
-    C->>A: aoc conclude --results … "duplicates: retry fired on a payload already in flight; fixed in <commit>"
-    C-->>E: pass on intake-outage; flaky-network is next, or stop here
-```
-
-Six worked sessions, with the exchange turn by turn, are in
-[docs/sessions.md](docs/sessions.md).
-
-## How it works
+- **A log generator** that writes realistic lines to files or stdout.
+  Every line carries a sequence marker, so delivery can be accounted for
+  exactly rather than estimated from rates.
+- **A fake intake** that stands in for Datadog's logs endpoint. It counts
+  every record, injects faults on demand (latency, dropped connections,
+  429s and 5xx, full outages, a slow uplink), scrapes the agent's
+  telemetry, and copies the agent's continuous-profiler uploads before
+  forwarding them to Datadog.
+- **A reporter** that turns the run into `report.md`, and for an A/B test
+  into `findings.md`: a verdict, the four signals, and the profile
+  functions that moved, with file and line.
 
 ```mermaid
 flowchart LR
@@ -263,71 +37,292 @@ flowchart LR
     IN -->|"report.json, pprof"| RES["results/&lt;name&gt;/<br/>findings.md · compare.md · notebook.json"]
 ```
 
-Every generated line carries a sequence number, so the intake counts
-missing and duplicated records exactly. The intake is also where faults
-are injected (latency, dropped connections, 429 and 5xx, outages, a slow
-uplink), where the agent's telemetry is scraped, and where its
-continuous-profiler uploads are copied before being forwarded. An A/B
-test runs the two sides alongside each other, each with its own intake,
-so both agents see the same moment of the host.
+An A/B test runs two of these stacks side by side on the same host, so
+both agents see the same moment of the machine. Datadog is the system of
+record: `aoc.*` metrics, `source:aoc` events, the agent's own profiles
+and a notebook per test, all tagged `experiment:<name> variant:a|b`.
+`results/` is the working copy.
 
-### What Claude reads back
+## Why you would use it
 
-`aoc ab` writes `results/<name>/findings.md`, a brief sized to be read
-whole: a verdict line, then
+The agent's CI has an end-to-end suite and single-machine performance
+tests. They are the record of truth for a release, and they answer
+"did this commit regress the benchmark". `aoc` is for the questions that
+come up before you push and that CI is not shaped to answer:
+
+- **Does my working tree lose or duplicate records under a specific
+  failure?** A 45 s intake outage, copytruncate rotation at 128 KiB,
+  writers that crash mid-line. The ledger is exact, so "0 lost, 3
+  duplicated" is a fact, not a sampling artifact.
+- **What does this flag or setting cost, and what does it buy?** Same
+  build on both sides, the flag on one. CPU, memory, saturation, wire
+  bytes and the feature's own counters on one page.
+- **Where is the knee on this machine?** Raise one knob one run at a
+  time until delivery drops or a component saturates.
+- **Which function moved?** The profiler runs on both sides. The brief
+  diffs CPU, heap and allocations function by function and marks which
+  files changed between the two builds.
+
+A quick look is about five minutes. A decision (ten minutes, two rounds,
+both sides at once) is about half an hour. Builds from your checkout
+take about a minute each after the first.
+
+## Getting started
+
+You need Docker, Go 1.25 or later, and a Datadog API key so metrics,
+profiles and notebooks land in your org. An app key lets `aoc` create the
+notebook itself.
+
+```bash
+cp .env.example .env     # DD_API_KEY, optionally DD_APP_KEY
+make build               # ./bin/aoc
+```
+
+A first run by hand, five minutes, one agent, the steady workload:
+
+```bash
+./bin/aoc run --profile baseline --duration 2m --name first-look
+cat results/first-look/report.md
+```
+
+A first A/B, the release against the agent's master image:
+
+```bash
+./bin/aoc ab --b datadog/agent-dev:master-py3 --runs 1 --duration 2m --name smoke \
+  --focus "smoke: release vs master"
+cat results/smoke/findings.md
+```
+
+Or start Claude Code in this directory and state the goal:
+
+```text
+I changed the sender's retry backoff in ../datadog-agent. Is it ready?
+```
+
+Claude builds an image from your checkout, plans two to four runs, runs
+them one at a time in the background, reads each brief and tells you what
+moved and what it would run next. `docs/sessions.md` shows six sessions
+turn by turn.
+
+## The workloads
+
+A workload is a profile in [profiles/](profiles/): the generators, the
+intake's fault timeline, any agent settings, and the measured window.
+Each one is built to stress a different part of the pipeline, and every
+number in it can be changed on the command line (next section).
+`./bin/aoc profiles` prints this list with the resolved numbers.
+
+| workload | stresses | shape | intake faults | what to watch |
+|---|---|---|---|---|
+| `baseline` | everything, lightly; the reference point | 8 plain + 8 JSON file streams, 10k lines/s total, 5 % stack traces, 2 MiB rotation, 3 min | none | the four signals; a change that shows here shows everywhere |
+| `high-throughput` | the file tailer at its limit | 24 plain streams, 100k lines/s, 4 MiB rotation keeping 3, 8 % stack traces, 6 % oversized 4 KiB lines, 3 min | none | delivery ratio, saturation, CPU, end-to-end latency; raise `rate` until something gives |
+| `deterministic-bytes` | the whole pipeline's maximum on identical input | 8 streams flat out, seeded content, a fixed 2,000,000 records, 4 MiB rotation | none | throughput is the agent's maximum; CPU seconds per 1M logs and wire bytes are directly comparable. No latency: timestamps are synthetic |
+| `rotation-churn` | rotation races in the tailer | 16 streams, 20k lines/s, 128 KiB files kept 2 deep; copytruncate on the plain half, rename on the JSON half, 3 min | none | lost records per stream; the streams table says which rotation mode lost |
+| `chaos-restarts` | the tailer's file-handle lifecycle | 24 streams, 16k lines/s, each stream crashes 3 times a minute and restarts after 5 s, 4 min | none | lost and duplicated records around restarts, open file handles |
+| `multiline-heavy` | the decoder's multiline aggregation | 12 plain streams, 8k lines/s, 35 % of records followed by a Python, Java or Go stack trace; auto multiline detection off, 3 min | none | orphan continuation lines, "multiline received / written", CPU; flip `DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION` |
+| `high-compression` | the encoder and compression | 12 plain + 12 JSON streams, 30k lines/s, 20 % stack traces, 12 % oversized lines, 256 KiB rotation, 3 min | none | wire bytes per second, compression ratio, CPU; compare `DD_LOGS_CONFIG_COMPRESSION_KIND=gzip` and `zstd` |
+| `incident-scenario` | how the pipeline absorbs a step change | the built-in incident scenario at 10× speed: calm, a sudden 14-stream spike with heavy traces and bursts, a slow recovery, 5 min | none | latency and saturation through the spike, buffering, recovery |
+| `intake-outage` | the sender's buffering, retry and backoff | the `baseline` streams, 4 min | 503 to every request from 45 s to 90 s, then 20 % 429s from 150 s to 180 s | recovery time, retries and responses by status, lost or duplicated on the way back |
+| `flaky-network` | exactly-once delivery on a bad uplink | the `baseline` streams, 4 min | from 30 s to 3 min: 10 % of requests get no response, every response delayed 300 ± 200 ms, bodies read at 500 kB/s | duplicates first, then latency and in-flight payloads |
+| `tag-heavy-fleet` | tag volume in the processor and the docker launcher | 15 containers logging to stdout at 500 lines/s each, collected by the docker log driver; about 40 tags per line from 20 docker labels plus 15 host tags, 3 min | none | tag bytes per log, CPU and allocations in the processor; compare with and without `DD_LOGS_CONFIG_TAG_FILTERS` |
+
+Which one to reach for, by the code you touched:
+
+| you touched | start with | then |
+|---|---|---|
+| the tailer, rotation, file handles | `rotation-churn` | `chaos-restarts` |
+| the decoder, multiline, framing | `multiline-heavy` | `high-throughput` |
+| the processor, tags, encoding | `baseline` | `tag-heavy-fleet` |
+| the sender, batching, retry, backoff | `intake-outage` | `flaky-network` |
+| compression | `high-compression` with `--watch "received wire B/s"` | `deterministic-bytes` |
+| container logs, autodiscovery | `tag-heavy-fleet --set app.replicas=30` | |
+| raw throughput, a version bump | `deterministic-bytes` | `baseline` |
+
+### Tuning a workload
+
+Nothing in a profile is fixed. The command line changes any of it, and
+the profile as it actually ran (every default and override applied) is
+written to `results/<name>/profile.yaml`, so a run can be repeated from
+one file.
+
+| to change | flag | examples |
+|---|---|---|
+| any generator setting, for all generators or one | `--set KEY=V`, `--set <gen>.KEY=V` | `--set rate=20000`, `--set json.streams=16`, `--set multiline-rate=0.3`, `--set plain.rotate-mode=truncate`, `--set app.replicas=30` |
+| the intake, for the whole window | `--fault K=V,…` | `--fault latency_ms=500,jitter_ms=200`, `--fault drop_rate=0.05`, `--fault error_rate=0.2,error_status=429`, `--fault outage=true`, `--fault read_bps=500000` |
+| an agent setting on both sides | `--env DD_…=…` | `--env DD_LOGS_CONFIG_COMPRESSION_KIND=gzip` |
+| an agent setting on the candidate only | `--b-env DD_…=…` | `--b-env DD_LOGS_CONFIG_PIPELINES=16` |
+| the window and the rounds | `--duration`, `--runs` | `--runs 1 --duration 2m` for a look, `--runs 3` when a delta sits on its threshold |
+| which packages the profile diff puts first | `--code PKG` | `--code comp/logs-library/sender` |
+| a metric promoted to the headline | `--watch METRIC` | `--watch "tag bytes per log"` |
+
+The `--set` keys are the `aoc generate` flags without the dashes
+(`streams`, `rate`, `rotate-bytes`, `rotate-keep`, `rotate-mode`,
+`multiline-rate`, `wide-line-rate`, `wide-line-bytes`, `mode` and that
+mode's flags, and so on), plus `format`, `output` and `replicas`. An
+unknown key is an error before anything starts. `--plan` prints the
+resolved workload and exits, which is the way to check an override.
+
+A new profile file is only needed when a shape is worth keeping or when
+faults have to change during the window (a `faults:` timeline). Copy the
+closest one and edit it; [profiles/README.md](profiles/README.md) has the
+format. [aoc.yaml](aoc.yaml) holds what every test shares: the control
+image, the default workload, the window, the rounds and the per-signal
+thresholds. It is settings, never a test.
+
+## Reading the results
+
+### A single run
+
+`results/<name>/report.md`, delivery section first. The ledger is exact:
+
+- **lost**: generated, never received after the drain. With faults on,
+  the report says whether they may still be buffered in the agent rather
+  than gone.
+- **duplicated**: received more than once. Almost always a retry of a
+  payload the intake had already counted.
+- **orphaned**: a continuation line that arrived without its first line.
+  A multiline aggregation miss.
+- **truncated**: a record cut short. Usually an oversized line.
+- **out of order**: reported, not a failure; expected across many
+  streams.
+
+After that: end-to-end latency percentiles, throughput, retries and
+responses by HTTP status, the agent's CPU, RSS and Go heap, component
+utilization, and the top messages from the agent log.
+
+### An A/B test
+
+`results/<name>/findings.md` is the brief. It opens with a verdict line,
+then one section per signal:
 
 | | what decides it | fails the run |
 |---|---|---|
-| **delivery gate** | records lost, duplicated, orphaned or truncated on the candidate | yes (exit 3) |
-| **throughput** | received logs per second (the agent's maximum under `deterministic-bytes`) | no |
+| **delivery gate** | records lost, duplicated, orphaned or truncated on the candidate | yes, exit 3 |
+| **throughput** | received logs per second. A paced workload holds its rate, so this only moves when the candidate falls short of what was generated. Under `deterministic-bytes` it is the agent's maximum | no |
 | **saturation** | the busiest component's `logs_component_utilization` ratio | no |
-| **cpu** | core agent process CPU avg, CPU seconds per 1M logs | no |
-| **memory** | core agent RSS max, container anon memory avg, Go heap in use | no |
+| **cpu** | core agent process CPU average, CPU seconds per million logs | no |
+| **memory** | core agent RSS max, container anonymous memory average, Go heap in use | no |
 
-Each signal has a threshold in [aoc.yaml](aoc.yaml). Under a regressed
-signal comes the evidence: memory by process and by cgroup, utilization by
-component, the agent's CPU and heap profiles diffed function by function,
-and each mover located at `file:line` with whether that file changed
-between the two builds. `compare.md` beside it has every metric.
-`--watch METRIC` promotes any of them to the headline for a test that is
-about it.
+Each signal has a threshold in `aoc.yaml` (5 % for throughput, CPU and
+memory, 10 % for saturation by default). Under a signal that crossed it
+comes the evidence: memory by process and by cgroup, utilization by
+component, the CPU, heap and allocation profiles diffed function by
+function, each mover at `file:line`, and whether that file changed
+between the two builds. Every other metric (latency, tags, compression,
+wire bytes, goroutines, log warnings) is in `compare.md` beside it.
 
-## Shaping the environment
+How to read what comes back:
 
-Claude chooses these from your goal. They are all on the command line, so
-a new question rarely needs a new file.
+| you see | it means | do |
+|---|---|---|
+| exit 3, the gate failed on b | the candidate lost or duplicated records | look at the streams table (which stream, where relative to rotations) and the retry table; this is a finding, not a harness error |
+| a signal crossed its threshold on b, a was flat | the build | the profile diff under that signal names the function; the code table says if its file changed |
+| both sides moved the same way | the host or the workload, not the change | rerun, or ignore; the brief marks these separately |
+| a delta within a point of its threshold | not decided | another round with `--runs 3`, not an investigation |
+| clean | nothing crossed | the next workload for the area you touched, then conclude |
+| lost records after a run with faults | retries may still be in flight | the report says so; a longer `drain:` settles it |
 
-| you care about | Claude reaches for |
-|---|---|
-| the tailer, rotation, file handles | `--workload rotation-churn`, then `chaos-restarts`; `--code pkg/logs/tailers` |
-| the decoder, multiline, framing | `multiline-heavy`; `--code pkg/logs/internal/decoder` |
-| the processor, tags, encoding | `baseline` or `tag-heavy-fleet`; `--code comp/logs-library/processor` |
-| the sender, batching, retry, backoff | `intake-outage`, then `flaky-network`; `--code comp/logs-library/sender` |
-| compression | `high-compression`; `--watch "received wire B/s"` |
-| container logs, autodiscovery | `tag-heavy-fleet --set app.replicas=N` |
-| raw throughput or a version bump | `deterministic-bytes`, then `baseline` |
-| a feature flag | `--b-env DD_…=…` on the candidate only |
-| a setting both sides need | `--env DD_…=…` |
-| a heavier or lighter shape | `--set rate=20000`, `--set json.streams=16`, `--set multiline-rate=0.3` |
-| the intake misbehaving all window | `--fault latency_ms=500`, `drop_rate=0.05`, `error_rate=0.2,error_status=429`, `outage=true`, `read_bps=500000` |
-| faults that change mid-window | a `faults:` timeline in a copied profile |
-| a first look versus a decision | `--runs 1 --duration 2m` versus the config's 10 min and 2 rounds; `--runs 3` when a delta sits on its threshold |
+A real one, from the tag-filter session in `docs/sessions.md`: same
+build on both sides, every tag key excluded on the candidate, four times
+the baseline rate. Core agent CPU went from 34.5 % to 30.9 %, Go heap in
+use from 104.9 MB to 88.2 MB, wire bytes fell 4 % even though the
+compression ratio dropped from 21.7× to 17.4×, and the brief named the
+filter's own cost: a per-message `make([]string)` in
+`tagfilter.(*Scoped).Keep` at 1.7 MB/s of allocations.
 
-The workloads in [profiles/](profiles/) (`./bin/aoc profiles` lists them
-with their numbers): `baseline`, `high-throughput`, `deterministic-bytes`,
-`rotation-churn`, `chaos-restarts`, `multiline-heavy`, `high-compression`,
-`incident-scenario`, `intake-outage`, `flaky-network`, `tag-heavy-fleet`.
-[profiles/README.md](profiles/README.md) has the format; the profile as it
-ran, every default and `--set` applied, is written next to the results so
-a run is reproducible from one file.
+### Where things are
 
-[aoc.yaml](aoc.yaml) holds what every test shares: the control image,
-the default workload, the window, rounds and the per-signal thresholds.
-It is settings, never a test.
+| want | read | never |
+|---|---|---|
+| a run's outcome | `results/<name>/report.md` | |
+| the verdict and why | `results/<name>/findings.md` | `report.json` whole, `timeseries.csv`, `*.pprof` |
+| the signals or the gate alone | `jq '.signals' results/<name>/findings.json`, `jq '.gate' …` | |
+| every metric | `results/<name>/compare.md` | |
+| the agent's log | `grep -c '| ERROR |' results/<name>/<side>/agent.log` | `cat agent.log` |
+| what a built side came from | `jq '.sides[].build' results/<name>/ab.json` | |
+| the workload as it ran | `results/<name>/<side>/profile.yaml` | |
+| charts and flame graphs | the notebook URL in `ab.json`, or the Datadog MCP | hand-built profiler URLs |
 
-## By hand
+When a signal regressed, the brief's `Next` line names the Datadog MCP
+call to make. Two calls per regressed signal is the budget. Record what it
+turned out to be with `aoc conclude`; the text lands on top of the
+notebook, as an event next to the run's metrics, and in `findings.md`.
 
-Everything Claude runs is a command you can run yourself.
+## Working with Claude
+
+The repository ships four skills in `.claude/skills/`. `/aoc` takes a
+goal to a conclusion; the others are what it delegates to, and each can
+be asked for directly.
+
+| skill | fires on | does |
+|---|---|---|
+| `aoc` | "I'm working on …, help me test it", "is my branch ready", "keep going" | plans two to four runs, runs them in order, reads each brief, decides the next one, closes with `aoc conclude` |
+| `ab-test` | "test my branch", "did master regress", "flag on vs off" | one `aoc ab` line from what you changed; runs it; reports the verdict |
+| `experiment` | "what happens to the agent when …", "find the knee" | one `aoc run` line from a situation, or a sweep of one knob one run at a time |
+| `investigate` | "why did memory go up in results/x" | from the brief to a named function, with a bounded number of Datadog MCP calls, then `aoc conclude` |
+
+```mermaid
+sequenceDiagram
+    participant E as Engineer
+    participant C as Claude
+    participant A as aoc
+    participant D as Datadog
+    E->>C: I changed the sender's retry backoff. Is it ready?
+    C->>C: plan: smoke, then intake-outage, then flaky-network
+    C->>A: aoc ab --b-src . --a-src main --runs 1 --duration 2m --plan
+    A-->>C: resolved plan (images, workload, window)
+    C->>A: aoc ab … (background)
+    A->>D: aoc.* metrics, events, profiles, notebook
+    A-->>C: exit 0, results/…/findings.md
+    C-->>E: smoke clean. Running intake-outage, 10 min, 2 rounds
+    C->>A: aoc ab --b-src . --a-src main --workload intake-outage --code comp/logs-library/sender
+    A-->>C: exit 3, b duplicated 1,204 records after the 503 window
+    C->>C: reads the gate, the retry table, the events timeline
+    C->>D: search_datadog_events source:aoc run:…-b
+    C-->>E: duplicates begin 2 s after the outage clears, retries overlap the first successful resend
+    E->>C: fixed, rerun b only
+    C->>A: aoc ab --only b
+    A-->>C: pass
+    C->>A: aoc conclude --results … "duplicates: retry fired on a payload already in flight. Fixed in the follow-up commit"
+    C-->>E: pass on intake-outage. flaky-network is next, or stop here
+```
+
+Prompts that map onto one command each:
+
+> I changed the tailer's rotation handling on my branch. Does it lose
+> anything under copytruncate?
+
+```bash
+./bin/aoc ab --b-src . --a-src main --workload rotation-churn \
+  --code pkg/logs/tailers --code pkg/logs/launchers \
+  --focus "tailer rotation handling: anything lost under copytruncate?"
+```
+
+> Is auto multiline detection worth its CPU when a third of the lines are
+> stack traces? Same build, flag on versus off.
+
+```bash
+./bin/aoc ab --b datadog/agent:7 --workload multiline-heavy \
+  --b-env DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION=true \
+  --focus "auto multiline detection at 35% stack traces: cost and benefit"
+```
+
+> Where is the knee for the file tailer on this laptop?
+
+```bash
+./bin/aoc run --profile high-throughput --set rate=100000 --duration 2m --name knee-100k
+./bin/aoc run --profile high-throughput --set rate=150000 --duration 2m --name knee-150k
+./bin/aoc compare results/knee-100k results/knee-150k
+```
+
+> Thirty containers on stdout with forty tags each, and the intake reads
+> at 500 kB/s. Does the agent keep up?
+
+```bash
+./bin/aoc run --profile tag-heavy-fleet --set app.replicas=30 --fault read_bps=500000 --name fleet-slow-uplink
+```
+
+## Commands
 
 ```text
 aoc ab        --b IMAGE | --b-src . [--a IMAGE | --a-src REF] [--workload NAME|PATH]
@@ -342,20 +337,21 @@ aoc notebook  --results results/x               (re)create a Datadog notebook
 aoc generate | intake | ship | report           the pieces, run by hand
 ```
 
-Every command takes `-h`. `--plan` prints the resolved workload, sides
-and rounds and exits. A run takes warmup + window + drain + about two
-minutes; `aoc ab` runs both sides at once, two rounds by default, so a
-decision is about half an hour and a smoke is five minutes. Exit 3 means
-the delivery gate failed, which is often the finding, not an error.
+`--b-src .` builds the image under test from the agent checkout
+(`source:` in `aoc.yaml`, `DATADOG_AGENT_SRC`, else `../datadog-agent`),
+uncommitted changes included. `--a-src main` builds the control the same
+way so only the branch differs. Every command takes `-h`. A run takes
+warmup + window + drain + about two minutes; `aoc ab` runs both sides at
+once. Exit 3 means the delivery gate failed.
 
 ## Docs
 
 | | |
 |---|---|
-| [docs/sessions.md](docs/sessions.md) | six sessions turn by turn: what was asked, what Claude ran, what came back, what it proposed next |
+| [docs/sessions.md](docs/sessions.md) | six sessions turn by turn: what was asked, what ran, what came back, what was proposed next |
 | [AGENTS.md](AGENTS.md) | the agent-facing guide: how to lead the loop, what to read and what never to |
 | [docs/measurements.md](docs/measurements.md) | what every number means and where it misleads |
 | [docs/datadog.md](docs/datadog.md) | what lands in Datadog: metrics, events, profiles, notebooks |
 | [docs/reference.md](docs/reference.md) | the pieces by hand, faults on a live intake, building from the checkout, gotchas |
-| [profiles/README.md](profiles/README.md) | the workload format |
+| [profiles/README.md](profiles/README.md) | the workload file format |
 | [aoc.example.yaml](aoc.example.yaml) | every shared setting with its default |
