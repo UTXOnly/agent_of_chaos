@@ -1,6 +1,5 @@
-// Package notebook turns run reports into Datadog notebooks: a findings
-// summary, timeseries cells over the aoc.* metrics the intake submitted, the
-// agent's own integration metrics, and pointers for digging further.
+// Package notebook prepares local evidence cells from run reports. The coding
+// agent selects visuals and authors the final analysis through Datadog MCP.
 package notebook
 
 import (
@@ -18,7 +17,7 @@ import (
 // Cell is a raw notebook cell ({"type":"notebook_cells","attributes":{...}}).
 type Cell map[string]any
 
-// Notebook is what gets created.
+// Notebook is the local evidence library, not a published notebook.
 type Notebook struct {
 	Name  string    `json:"name"`
 	Type  string    `json:"type"` // report | investigation | ...
@@ -62,24 +61,8 @@ func (o *Options) defaults() {
 	}
 }
 
-// Body renders the create-notebook request body.
-func (n *Notebook) Body() []byte {
-	body := map[string]any{"data": map[string]any{
-		"type": "notebooks",
-		"attributes": map[string]any{
-			"name":     n.Name,
-			"status":   "published",
-			"metadata": map[string]any{"type": n.Type, "is_template": false, "take_snapshots": false},
-			"time":     absTime(n.Start, n.End),
-			"cells":    n.Cells,
-		},
-	}}
-	b, _ := json.MarshalIndent(body, "", "  ")
-	return b
-}
-
 // File is the sidecar written next to report.json so the notebook can be
-// created later (aoc notebook, or the Datadog MCP's create_datadog_notebook).
+// selected evidence can be reused by the coding agent through Datadog MCP.
 func (n *Notebook) File() []byte {
 	b, _ := json.MarshalIndent(n, "", "  ")
 	return b

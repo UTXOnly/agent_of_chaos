@@ -4,6 +4,53 @@
 page is for running the pieces by hand, changing faults on a live intake,
 and the things that trip people up.
 
+## Commands for the development loop
+
+| Command | Outcome |
+|---|---|
+| `aoc ab --b-src . --a-src main --workload NAME --focus "question" --plan` | Inspect the checkout, control and workload; remove `--plan` to run |
+| `aoc run --profile NAME --name NAME` | One Agent in a situation |
+| `aoc profiles [show NAME]` | Available workloads and resolved settings |
+| `aoc build --src .` | Build an Agent image from the configured checkout |
+| `aoc ab --config results/NAME/aoc.yaml --only b` | Rerun B and reuse the previous control |
+| `aoc ab --config results/NAME/aoc.yaml --compare-only` | Refresh local findings and notebook evidence |
+| `aoc compare results/x results/y` | Compare single runs |
+| `aoc conclude --results results/NAME --verdict pass --file analysis.md` | Save an A/B conclusion and post its event; does not change the measured gate |
+| `aoc notebook --results results/NAME` | Prepare evidence for MCP authoring |
+| `aoc notebook --results results/NAME --link URL` | Record the notebook URL returned by MCP |
+
+Every command takes `-h`. [First run](../README.md#first-answer-from-your-checkout),
+[workloads and overrides](workloads.md), [MCP publishing](notebooks.md).
+
+## What the experiment controls
+
+```mermaid
+flowchart TB
+    S["Resolved workload + fault schedule<br/>same settings for A and B"] --> GA
+    S --> GB
+    subgraph A["Control stack · same Docker host"]
+        GA["Numbered records"] --> AA["Agent A<br/>control build/settings"]
+        AA --> IA["Fake intake A<br/>faults + delivery ledger"]
+    end
+    subgraph B["Candidate stack · same Docker host"]
+        GB["Numbered records"] --> AB["Agent B<br/>changed build/setting"]
+        AB --> IB["Fake intake B<br/>faults + delivery ledger"]
+    end
+    IA --> E["Compare delivery + resource cost<br/>inspect profiles and build provenance"]
+    IB --> E
+    E --> C["Coding agent: interpret evidence<br/>conclusion + next experiment"]
+    C --> N["Datadog MCP<br/>authored notebook"]
+```
+
+Each stack also captures Agent telemetry and profiles; the intake submits
+metrics/events and tees profiles to Datadog. A paced workload has the same
+configuration on both sides, not necessarily byte-identical records or identical
+scheduling. `deterministic-bytes` supplies seeded fixed-budget input. Sharing the
+host reduces time drift but creates contention; `--sequential` trades contention
+for drift. Datadog holds the telemetry and shared analysis, `results/` the working
+copy. The fake intake models selected failure behaviors, not the production
+backend's complete behavior.
+
 ## Faults
 
 | field | effect | what the agent does |

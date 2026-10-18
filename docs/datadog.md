@@ -105,32 +105,23 @@ conclusion` next to it.
 
 ## Notebooks
 
-`aoc notebook --results <dir>` builds a *report* notebook whose global time
-is the run window ±60 s. Cells: findings summary; generated vs received;
-delivery ledger; latency; bytes; responses by status; agent CPU; agent
-memory; agent bytes sent; destination responses by status; pipeline
-utilization; retries/network errors; tags per log; faults; per generator;
-dig-deeper links. With several `--results`, the comparison table comes first
-and each run's key cells are pinned to that run's window.
+The coding agent authors and publishes the notebook through Datadog MCP.
+`aoc` writes `notebook.md` (a compact evidence index) and `notebook.json`
+(reusable cells), without making notebook API calls. Generated cells preserve
+run filters, absolute windows, A/B time shifts and profiler comparison links;
+the agent chooses the useful ones and writes a concise explanation grounded
+in `findings.md` / `report.md` and `conclusion.md`.
 
-`aoc ab` builds an *A/B* notebook instead, titled with the test's
-`--focus`, in the order the brief is read: the verdict, the signals table
-(throughput, saturation, cpu, memory against their thresholds), the
-delivery gate and what was tested; the conclusion once `aoc conclude` has
-written one; one cell per signal that regressed, with its reading and the
-tables that name the cause; the profile tables (packages under test first)
-and the code behind the movers; the profiler's comparison view as
-same-origin iframes (notebooks have no native profiling widget): the whole
-agent's CPU, then one focused on each mover; then four charts, one per
-signal, both sides overlaid, plus the injected faults when the workload
-had any. The cells are pinned to the latest run's window and each earlier
-run's queries are wrapped in `timeshift(…, -<seconds between the runs>)`
-so the same second of the measured window lines up; grouped queries get
-`run` added to their group-by so the legend still tells the sides apart.
-Every other metric stays in `compare.md`.
+`aoc notebook --results <dir>` prepares this evidence for a single run or
+an existing A/B. Several single-run `--results` paths prepare comparison
+cells pinned to each run's window. `aoc notebook --results <dir> --link URL`
+records the URL returned by MCP in `notebook.url` and, for A/B, `ab.json`.
+Local re-renders preserve that URL; they never modify the remote notebook.
 
-Creating the notebook needs `DD_APP_KEY`; `notebook.json` is always written
-and can be fed to the Datadog MCP's `create_datadog_notebook`.
+`DD_APP_KEY` is no longer used. `DD_API_KEY` still handles telemetry/events;
+MCP authenticates separately. See [notebook authoring](notebooks.md) for setup,
+summary quality, selected-cell extraction, updating without duplicate notebooks,
+and the local-only fallback when MCP is unavailable.
 
 ## Turning it off
 

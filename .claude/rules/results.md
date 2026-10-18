@@ -36,6 +36,9 @@ A results directory is large; the brief is small. Order of preference:
    - `jq '.streams[] | select(.missing>0) | {gen,stream,missing,gaps}' <side>/report.json`
 6. The agent log with `grep` (`grep -c '| ERROR |'`, `grep '| ERROR |' | sort | uniq -c | sort -rn | head`), never whole.
 
-Never open `timeseries.csv`, `notebook.json`, `*.pprof`, `intake.log` or
+For notebook authoring, read `notebook.md` and extract only selected indexed
+cells from `notebook.json` with `jq`; follow `docs/notebooks.md`.
+
+Never open `timeseries.csv`, the whole `notebook.json`, `*.pprof`, `intake.log` or
 `gen-*.log` into context; ask the Datadog notebook or the MCP for charts.
 `results/` is gitignored; nothing here is ever committed.

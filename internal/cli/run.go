@@ -431,10 +431,13 @@ func runRun(args []string) int {
 	out := fs.Str("out", "results", "results root directory")
 	keep := fs.Bool("keep", false, "leave the stack running afterwards (default: docker compose down -v)")
 	noBuild := fs.Bool("no-build", false, "do not rebuild the aoc image")
-	mkNotebook := fs.Bool("notebook", os.Getenv("DD_APP_KEY") != "", "create a Datadog notebook for the run (default: when DD_APP_KEY is set; notebook.json is always written)")
+	legacyNotebook := fs.Bool("notebook", false, "deprecated: publish through Datadog MCP; local notebook evidence is always written")
 	ddSite := fs.Str("dd-site", envOr("DD_SITE", "datadoghq.com"), "Datadog site for the notebook (env DD_SITE)")
 	if !fs.parse(args) {
 		return 2
+	}
+	if *legacyNotebook {
+		fmt.Fprintln(os.Stderr, "notebook: direct API publishing was removed; use Datadog MCP (docs/notebooks.md).")
 	}
 	if *profileName == "" {
 		return fail("run: --profile is required (see aoc profiles)")
@@ -499,16 +502,13 @@ func runRun(args []string) int {
 	if err != nil {
 		return fail("run: %v", err)
 	}
-	nbRes, nbErr := makeNotebook(context.Background(), []*report.Report{r}, notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv()}, filepath.Join(spec.resultsDir, "notebook.json"), ddapi.FromEnv(), !*mkNotebook)
-	fmt.Fprintf(os.Stderr, "\nresults in %s (report.md, report.json, timeseries.csv, notebook.json, agent-status.txt, agent.log)\n\n", spec.resultsDir)
+	nbRes, nbErr := makeNotebook([]*report.Report{r}, notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv()}, filepath.Join(spec.resultsDir, "notebook.json"))
+	fmt.Fprintf(os.Stderr, "\nresults in %s (report.md, report.json, timeseries.csv, notebook.md, notebook.json, agent-status.txt, agent.log)\n\n", spec.resultsDir)
 	printVerdict(r)
-	switch {
-	case nbErr != nil:
-		fmt.Fprintf(os.Stderr, "notebook: %v\n", nbErr)
-	case nbRes.URL != "":
-		fmt.Printf("notebook: %s\n", nbRes.URL)
-	case *mkNotebook:
-		fmt.Printf("notebook: DD_APP_KEY not set; wrote %s. Create it with `aoc notebook --results %s` or the Datadog MCP\n", nbRes.File, spec.resultsDir)
+	if nbErr != nil {
+		fmt.Fprintf(os.Stderr, "notebook evidence: %v\n", nbErr)
+	} else {
+		explainNotebook(nbRes)
 	}
 	if r.Delivery.Missing > 0 || r.Delivery.Duplicates > 0 {
 		return 3

@@ -164,7 +164,7 @@ func TestGateFails(t *testing.T) {
 	if res.Gate.Pass {
 		t.Fatal("the gate should fail when records are lost")
 	}
-	for _, want := range []string{"1,200 lost / missing in dev", "3 duplicates in dev (2 in release too: the workload or the harness, not the build)"} {
+	for _, want := range []string{"1,200 lost / missing in dev", "3 duplicates in dev (2 in release too: shared failure; cause not isolated)"} {
 		if !strings.Contains(res.Gate.Line, want) {
 			t.Errorf("gate line missing %q:\n%s", want, res.Gate.Line)
 		}

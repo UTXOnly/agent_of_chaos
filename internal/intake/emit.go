@@ -79,7 +79,7 @@ func newEmitter(s *Server, cfg DDConfig) *emitter {
 		cfg.Interval = 10 * time.Second
 	}
 	e := &emitter{
-		s: s, cfg: cfg, client: ddapi.New(cfg.Site, cfg.APIKey, ""),
+		s: s, cfg: cfg, client: ddapi.New(cfg.Site, cfg.APIKey),
 		prevTele: map[string]teleSample{}, events: make(chan ddapi.Event, 256),
 	}
 	e.st = EmitterStatus{Enabled: true, Site: e.client.Site, Interval: cfg.Interval.String()}

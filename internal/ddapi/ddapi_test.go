@@ -11,7 +11,7 @@ import (
 	"github.com/klauspost/compress/gzip"
 )
 
-func TestSubmitAndNotebook(t *testing.T) {
+func TestSubmitAndEvent(t *testing.T) {
 	var gotSeries int
 	var gotHeaders http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,12 +30,6 @@ func TestSubmitAndNotebook(t *testing.T) {
 			gotSeries += len(body.Series)
 			w.WriteHeader(202)
 			w.Write([]byte(`{"errors":[]}`))
-		case "/api/v1/notebooks":
-			if r.Header.Get("DD-APPLICATION-KEY") == "" {
-				w.WriteHeader(403)
-				return
-			}
-			w.Write([]byte(`{"data":{"id":123456}}`))
 		case "/api/v1/validate":
 			w.Write([]byte(`{"valid":true}`))
 		case "/api/v1/events":
@@ -46,7 +40,7 @@ func TestSubmitAndNotebook(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := New("datadoghq.com", "k", "")
+	c := New("datadoghq.com", "k")
 	c.BaseURL = srv.URL
 	ctx := context.Background()
 	if err := c.Validate(ctx); err != nil {
@@ -65,13 +59,8 @@ func TestSubmitAndNotebook(t *testing.T) {
 	if err := c.PostEvent(ctx, Event{Title: "t", Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.CreateNotebook(ctx, []byte(`{}`)); err == nil {
-		t.Error("expected app-key error")
-	}
-	c.AppKey = "app"
-	id, url, err := c.CreateNotebook(ctx, []byte(`{}`))
-	if err != nil || id != 123456 || url != "https://app.datadoghq.com/notebook/123456" {
-		t.Errorf("notebook: %d %s %v", id, url, err)
+	if gotHeaders.Get("DD-APPLICATION-KEY") != "" {
+		t.Error("telemetry must not use an application key")
 	}
 	if AppURL("us3.datadoghq.com") != "https://us3.datadoghq.com" || AppURL("datadoghq.eu") != "https://app.datadoghq.eu" {
 		t.Error("AppURL")

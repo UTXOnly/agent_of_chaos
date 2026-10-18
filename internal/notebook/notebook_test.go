@@ -26,23 +26,27 @@ func TestForRun(t *testing.T) {
 	if len(nb.Cells) != len(runCharts)+2 {
 		t.Fatalf("cells = %d", len(nb.Cells))
 	}
-	body := nb.Body()
+	body := nb.File()
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	attrs := parsed["data"].(map[string]any)["attributes"].(map[string]any)
-	if attrs["name"] != "aoc run: baseline · agent 7.79.0" || attrs["status"] != "published" {
-		t.Errorf("attrs: %v %v", attrs["name"], attrs["status"])
+	attrs := parsed
+	if attrs["name"] != "aoc run: baseline · agent 7.79.0" || attrs["type"] != "report" {
+		t.Errorf("attrs: %v %v", attrs["name"], attrs["type"])
 	}
 	s := string(body)
-	for _, want := range []string{"run:baseline", "aoc.intake.logs_per_sec{run:baseline}", "docker.cpu.usage{run:baseline,container_name:aoc-agent}", `"time": {`, "https://bhartford.datadoghq.com/profiling/explorer?query=service%3Adatadog-agent+run%3Abaseline"} {
+	for _, want := range []string{"run:baseline", "aoc.intake.logs_per_sec{run:baseline}", "docker.cpu.usage{run:baseline,container_name:aoc-agent}", "https://bhartford.datadoghq.com/profiling/explorer?query=service%3Adatadog-agent+run%3Abaseline"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("body missing %q", want)
 		}
 	}
-	if !strings.Contains(s, `"start": "2023-11-14T22:12:20Z"`) { // window start - 60s
-		t.Errorf("window start not applied: %s", s[:400])
+	var stored Notebook
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Start.Equal(sample("baseline").WindowStart.Add(-time.Minute)) {
+		t.Errorf("window start not applied: %s", stored.Start)
 	}
 }
 
@@ -51,12 +55,12 @@ func TestForCompare(t *testing.T) {
 	if len(nb.Cells) != 1+2*(1+len(keyCharts))+1 {
 		t.Fatalf("cells = %d", len(nb.Cells))
 	}
-	s := string(nb.Body())
+	s := string(nb.File())
 	if !strings.Contains(s, "aoc compare: a vs b") || !strings.Contains(s, "{run:b}") {
 		t.Errorf("compare body: %s", s[:300])
 	}
 	// per-run cells carry their own absolute time
-	if strings.Count(s, `"live": false`) < 1+2*len(keyCharts) {
+	if strings.Count(s, `"live": false`) < 2*len(keyCharts) {
 		t.Errorf("per-cell absolute time missing")
 	}
 }
@@ -106,7 +110,7 @@ func TestForAB(t *testing.T) {
 	if !nb.Start.Equal(b.WindowStart.Add(-time.Minute)) || !nb.End.Equal(b.WindowEnd.Add(time.Minute)) {
 		t.Errorf("window %s → %s", nb.Start, nb.End)
 	}
-	s := string(nb.Body())
+	s := string(nb.File())
 	for _, want := range []string{
 		`"query": "timeshift(avg:aoc.agent.process.cpu_percent{run:exp-a}, -300)"`, // a shifted onto b
 		`"alias": "release"`, // the side name, nothing else
@@ -127,7 +131,7 @@ func TestForAB(t *testing.T) {
 		}
 	}
 	var parsed map[string]any
-	if err := json.Unmarshal(nb.Body(), &parsed); err != nil {
+	if err := json.Unmarshal(nb.File(), &parsed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -152,7 +156,7 @@ func TestForAB(t *testing.T) {
 	if got := cellKinds(nb); !reflect.DeepEqual(got, want) {
 		t.Fatalf("cells with one regression topic:\n got %q\nwant %q", got, want)
 	}
-	s = string(nb.Body())
+	s = string(nb.File())
 	for _, want := range []string{"| signal | metric | release | candidate |", "| memory | core agent RSS max | 200.0 MB | 600.0 MB |", "Delivery gate:", "## Tested", "It is the python runner.", "### Memory",
 		`timeshift(avg:aoc.agent.container.memory_anon_bytes{run:exp-a}, -300)`} {
 		if !strings.Contains(s, want) {

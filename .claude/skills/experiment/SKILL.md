@@ -95,7 +95,7 @@ Read `results/<name>/report.md`, delivery section first. Report:
 3. what the fault did: end-to-end latency p99 and max, retries and
    responses by status, the agent's `sender_latency`;
 4. the cost: core agent CPU avg and RSS max;
-5. the notebook URL if one was created (the end of the log);
+5. the notebook URL if published through MCP, otherwise the local results path;
 6. the path of `results/<name>/profile.yaml`, which repeats the run.
 
 Single values: `jq '.delivery' results/<name>/report.json`,
@@ -145,3 +145,10 @@ agent, not a bug, and says nothing on its own.
 A sweep across two builds is one `aoc ab` per value with `--name
 <base>-<value>`, each judged on saturation and throughput; propose that
 only after the single-agent sweep has found the bracket.
+
+For a shared result, follow [docs/notebooks.md](../../../docs/notebooks.md).
+Save a concise local conclusion, use `notebook.md` to select evidence cells,
+and publish the authored analysis through MCP. `aoc conclude` is A/B-only;
+write `<results>/conclusion.md` directly for a single run. Missing MCP leaves
+the result usable locally. Scope capacity claims to this host and verify that
+the generator and intake are not the bottleneck.

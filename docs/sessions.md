@@ -7,6 +7,9 @@ session is a real run from this checkout (`results/dev-filter-all-4x`,
 notebook 15602107); the numbers in the other five are illustrative and
 show the shape of the exchange, not a measurement.
 
+Notebook publication now follows [the MCP authoring workflow](notebooks.md);
+the historical notebook reference above is retained as provenance.
+
 Each session follows the same loop:
 
 ```mermaid
@@ -61,8 +64,11 @@ window yields ten periods per side.
 | compression ratio | 21.65× | 17.42× | −19.5 % |
 | out of order | 5,395 | 4,178 | −22.6 % |
 
-Delivery 99.97 % on both sides, 0 duplicates. The 3.7k lost on each side
-are first lines rotated away during warmup, the harness, not the build.
+Delivery 99.97 % on both sides, 0 duplicates, about 3.7k missing per side.
+**The delivery gate fails.** The historical explanation was warmup rotation;
+matching counts alone do not establish that cause. Current window accounting
+excludes pre-window sequences, so validate the explanation against the recorded
+harness version and stream gaps before attributing the loss.
 
 **Claude's reading.** The compression ratio fell because the bytes removed
 were the most repetitive ones; wire bytes still went down, so it is not a
@@ -73,13 +79,15 @@ at `comp/logs-library/tagfilter/tagfilter.go:364`, four times the
 in place would remove it.
 
 ```bash
-./bin/aoc conclude --results results/dev-filter-all-4x --verdict pass \
-  "The filter stripped every tag (118.6 → 0 B/log) and paid for itself: core agent CPU 34.5 → 30.9 %, heap in use 104.9 → 88.2 MB, wire bytes −4 % despite compression 21.7× → 17.4×. Its own cost is tagfilter.(*Scoped).Keep at 1.7 MB/s of allocations from the per-message make([]string) at tagfilter.go:364; compacting in place would remove it."
+./bin/aoc conclude --results results/dev-filter-all-4x --verdict inconclusive \
+  "Delivery gate failed: about 3.7k missing on each side; shared-loss attribution remains unconfirmed. The filter stripped every tag (118.6 → 0 B/log) and paid for itself: core agent CPU 34.5 → 30.9 %, heap in use 104.9 → 88.2 MB, wire bytes −4 % despite compression 21.7× → 17.4×. Its own cost is tagfilter.(*Scoped).Keep at 1.7 MB/s of allocations from the per-message make([]string) at tagfilter.go:364; compacting in place would remove it."
 ```
 
-**Next, proposed.** The fleet shape: `tag-heavy-fleet` with 15 containers
-and about 40 tags per log, where the filter has more to strip and the
-docker launcher is on the path.
+**Next, proposed.** Rerun both sides with enough rotation retention and drain
+to isolate the shared missing records. If delivery is clean, try the fleet
+shape (`tag-heavy-fleet`) to check the resource tradeoff with container tags.
+The commands above show the recommended interpretation of the historical
+numbers, not a claim that this follow-up has already run.
 
 ## 2. I changed the sender's retry backoff. Is it ready to push?
 
