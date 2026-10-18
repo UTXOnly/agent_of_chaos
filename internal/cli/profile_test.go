@@ -138,7 +138,7 @@ func TestOverrideCompose(t *testing.T) {
 		t.Fatalf("override is not YAML: %v\n%s", err, out)
 	}
 	plain := doc.Services["gen-plain"]
-	if plain.ContainerName != "aoc-gen-plain" || plain.Environment["AOC_LOG_DIR"] != "/var/log/agent-of-chaos/plain" || plain.Environment["AOC_RATE"] != "5000" || len(plain.Volumes) != 1 || plain.Labels != nil {
+	if plain.ContainerName != "aoc-gen-plain" || plain.Restart != "on-failure" || plain.Environment["AOC_LOG_DIR"] != "/var/log/agent-of-chaos/plain" || plain.Environment["AOC_RATE"] != "5000" || len(plain.Volumes) != 1 || plain.Labels != nil {
 		t.Errorf("gen-plain: %+v", plain)
 	}
 	if doc.Services["gen-json"].Environment["AOC_ROTATE_BYTES"] != "256KiB" || doc.Services["gen-json"].Environment["AOC_FORMAT"] != "json" {

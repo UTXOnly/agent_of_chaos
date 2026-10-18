@@ -427,10 +427,13 @@ func (s service) compose(stack string) composeService {
 	cs := composeService{
 		Image:         aocImage,
 		ContainerName: stack + "-" + s.Name,
-		Restart:       "unless-stopped",
-		StopGrace:     "20s",
-		DependsOn:     map[string]map[string]string{"intake": {"condition": "service_healthy"}},
-		Environment:   env,
+		// Not unless-stopped: a generator with a budget (max-lines) exits 0
+		// when done, and a restart rewrites the same seqs and re-bases the
+		// intake's ledger. Chaos crashes are in-process.
+		Restart:     "on-failure",
+		StopGrace:   "20s",
+		DependsOn:   map[string]map[string]string{"intake": {"condition": "service_healthy"}},
+		Environment: env,
 	}
 	if g.Output == string(gen.OutputStdout) {
 		if _, ok := env["AOC_START_DELAY"]; !ok {
