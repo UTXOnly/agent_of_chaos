@@ -292,16 +292,10 @@ a:
 #
 # results: results
 
-## @param notebook - boolean - optional - default: true when DD_APP_KEY is set
-## Create the A/B notebook in Datadog: the brief first (verdict, one cell per
-## regression with its evidence, the profile diffs and links), the
-## profiler's comparison view embedded (a's flame graph beside b's for CPU,
-## heap and allocations, then one per mover focused on that function) and
-## the charts with both agents overlaid, the full table last. notebook.json is
-## always written and can be handed to the Datadog MCP's
-## create_datadog_notebook instead. `--focus` names the notebook.
-#
-# notebook: true
+## Notebooks: the coding agent writes the analysis and publishes through
+## Datadog MCP. notebook.md indexes reusable cells in notebook.json.
+## No DD_APP_KEY is used. See docs/notebooks.md.
+## The old notebook: boolean is accepted for saved configs but cannot publish.
 
 ## @param compose - list of strings - optional
 ## Extra compose files stacked on docker-compose.yml for every run, e.g. the

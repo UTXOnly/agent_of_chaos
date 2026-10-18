@@ -56,7 +56,7 @@ func Main(args []string, version string) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `aoc — Datadog logs agent testing harness
+	fmt.Fprintf(w, `aoc — fast local feedback for Datadog Agent logs changes
 
 Usage:
   aoc <command> [flags]
@@ -78,12 +78,15 @@ Commands:
 Every flag can also be set with an environment variable: AOC_<FLAG> with
 dashes as underscores (--log-dir → AOC_LOG_DIR). Flags win over env. A .env
 in the working directory is read first (like docker compose), so DD_API_KEY,
-DD_APP_KEY and DD_SUBDOMAIN there also serve the CLI's own Datadog calls.
+DD_SITE and DD_SUBDOMAIN also configure Datadog telemetry and links.
+Notebook analysis is authored/published by the coding agent through Datadog MCP.
 
 Quick start (Docker; DD_API_KEY in .env so metrics and profiles land in Datadog):
-  aoc ab --b datadog/agent-dev:my-branch-py3 --workload baseline --focus "why this build"
+  aoc ab --b-src . --a-src main --runs 1 --duration 2m --focus "my local change" --plan
+  # inspect the plan, then remove --plan to run (source: configured Agent checkout)
   cat results/<name>/findings.md       # what regressed, and the evidence (profiles, processes, telemetry)
   aoc conclude --results results/<name> "what it turned out to be"
+  aoc notebook --results results/<name>  # prepare evidence for Datadog MCP
   aoc run --profile profiles/baseline.yaml --name baseline   # one measured run
 `)
 }

@@ -109,7 +109,7 @@ exit. Do not poll, and do not touch Docker meanwhile: the run owns the
 `aoc-a` and `aoc-b` compose projects. Wall time is
 `runs × (warmup + duration + drain + ~2 min)`, doubled by `--sequential`.
 
-Exit codes: 0 ok; 3 the delivery gate failed (b lost, duplicated,
+Exit codes: 0 delivery gate passed (performance signals may still regress); 3 the delivery gate failed (b lost, duplicated,
 orphaned or truncated records); 130 interrupted; anything else means a run
 failed: `tail -40 results/ab.log`.
 
@@ -118,15 +118,15 @@ failed: `tail -40 results/ab.log`.
 The run's last lines name the brief (`tail -5 results/ab.log`); the
 experiment defaults to `<b tag>-<workload>`, so the first example above
 writes `results/my-branch-py3-rotation-churn/`. Read that `findings.md`
-and report this, in this order, and nothing else:
+and give a short answer to the original question using:
 
 1. the verdict line;
 2. every signal that moved, from the signals table: signal, metric, a, b,
    delta, and the threshold it was judged against;
 3. the gate line: pass, or what b lost, duplicated, orphaned or truncated;
-4. the notebook URL: `jq -r '.notebook' results/<name>/ab.json`;
+4. the notebook URL if published, otherwise the local results path;
 5. one next step: the `investigate` skill when a signal regressed, another
-   round when a delta sits on its threshold, nothing more when it is clean.
+   round when a delta sits on its threshold, the next relevant shape when the goal requires it, or a scoped conclusion.
 
 If the brief says no profiler uploads were captured, the window was
 shorter than a profiling period or the intake could not reach the
@@ -134,8 +134,14 @@ trace-agent. Say so, and expect the profile and code sections to be empty.
 
 ## Variations
 
-- `--only b` after rebuilding the dev image: re-runs b, reuses a. With
+- `--config results/<name>/aoc.yaml --only b` after rebuilding the dev image: re-runs b, reuses a. With
   `--b-src .` it rebuilds b from the tree as it now is first.
-- `--compare-only` re-renders the brief and the notebook from disk, after
+- `--config results/<name>/aoc.yaml --compare-only` re-renders the brief and local notebook evidence from disk, after
   a change to `thresholds`, `--watch` or `--code`.
 - `--sequential` when the host cannot carry both stacks at once.
+
+A profile mover suggests a cause; it does not establish one. Shared failures do
+not cancel the gate. A reused control can be stale: rerun both sides when host,
+image or workload conditions changed. If publishing the result, follow
+[docs/notebooks.md](../../../docs/notebooks.md); author the analysis through MCP
+from the evidence, not by uploading all generated Markdown.

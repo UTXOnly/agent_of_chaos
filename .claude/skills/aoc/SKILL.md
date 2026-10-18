@@ -88,11 +88,11 @@ engineer what is running and how long it takes, once.
 
 Read `findings.md` (or `report.md` for a single run) whole, once. Report
 the verdict line, every signal that moved with its threshold, the gate
-line, the notebook URL. Then decide, and say which of these it is:
+line, and the notebook URL if published (otherwise the local evidence path). Then decide, and say which of these it is:
 
 | the result | the next step |
 |---|---|
-| gate failed on b | investigate now: the delivery ledger, the retry table, the streams table; name the cause before anything else runs |
+| gate failed on b | investigate now: the delivery ledger, the retry table, the streams table; identify evidence and hypotheses; use an inconclusive conclusion if the cause remains unknown |
 | a signal regressed clearly | the `investigate` skill, then `aoc conclude`; offer the fix-and-rerun loop (`aoc ab --only b` rebuilds b from the tree) |
 | a delta within a point of its threshold | another round: the same line with `--runs 3`; do not investigate noise |
 | clean | the next shape in the plan; after the last one, `aoc conclude --verdict pass` with the numbers and stop |
@@ -100,9 +100,11 @@ line, the notebook URL. Then decide, and say which of these it is:
 | no profiles captured | say so; the window was shorter than a profiling period or the intake could not reach the trace-agent; lengthen `--duration` before trusting the cpu and memory sections |
 | the run failed (exit other than 0 or 3) | `tail -40` the log, fix the cause, rerun the same line |
 
-Both sides regressed the same way is the workload or the host, not the
-build: say so and lower `--set rate` or run `--sequential` before
-reading anything into it.
+When both sides fail similarly, check shared workload/host effects before
+attributing the result to the build. This is a hypothesis, not an exemption
+from the delivery gate. Lower `--set rate` or try `--sequential` to isolate
+contention; sequential runs introduce time drift. Do not call the change safe
+just because both sides lost the same number of records.
 
 ## 5. Close
 
@@ -111,6 +113,12 @@ Every session ends with a conclusion on the run that decided it:
 ```bash
 ./bin/aoc conclude --results results/<name> --verdict pass|fail|inconclusive "what it turned out to be, with the numbers"
 ```
+
+Use the saved config with `--compare-only` to refresh the local brief. For a
+shared notebook, follow [docs/notebooks.md](../../../docs/notebooks.md): write a
+concise analysis from evidence, select indexed charts, publish/update through
+MCP, and record the returned URL. If MCP is unavailable, finish locally and say
+the notebook is unpublished. Publication calls are separate from investigation.
 
 Then two or three sentences to the engineer: the answer to the goal, the
 runs that showed it (their `results/` paths and the notebook), and the
@@ -128,7 +136,12 @@ that stops short because of the host or time says what was not run.
   pprof whole.
 - Two Datadog MCP calls per regressed signal; the brief's **Next** line
   names the call. Load `datadog/profiling` before profiling calls,
-  `datadog/metrics` before metric queries; surface the
+  `datadog/metrics` before metric queries when available; surface the
   `visualizationLink` the tool returns, never a hand-built URL.
 - Numbers from the brief, not from memory; a delta you did not read is
   not a finding.
+
+A short local pass applies to the tested scenario, not release readiness. Report
+A/B values and thresholds; separate observation from causal hypothesis. For
+`--only b`, pass the saved `--config results/<name>/aoc.yaml` and disclose reuse
+of the older control. Repeat both sides if conditions changed.

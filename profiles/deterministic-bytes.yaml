@@ -1,5 +1,5 @@
 name: deterministic-bytes
-description: Byte-identical input written as fast as the disk allows. Seeded content, synthetic timestamps, a fixed budget of 2,000,000 records across 8 streams. Every run feeds the agent the same bytes, so wire bytes and CPU per log are directly comparable; throughput is the agent's maximum. No end-to-end latency, since the timestamps are synthetic.
+description: Byte-identical input written as fast as the disk allows. Seeded content, synthetic timestamps, a fixed budget of 2,000,000 records across 8 streams. Every run feeds the agent the same bytes, so wire bytes and CPU per log are directly comparable; throughput is a window average, not automatically maximum capacity. No end-to-end latency, since the timestamps are synthetic.
 duration: 4m
 warmup: 10s
 drain: 60s

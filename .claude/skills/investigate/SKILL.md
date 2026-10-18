@@ -1,6 +1,6 @@
 ---
 name: investigate
-description: Investigate the regressions an aoc A/B test found (the delivery gate, throughput, saturation, CPU, memory) from results/<name>/findings.md, using the local evidence first and a bounded number of Datadog MCP profiling/metric calls, then record the conclusion with aoc conclude. Use when asked why an agent build regressed or to explain an A/B result.
+description: Investigate the regressions an aoc A/B test found (the delivery gate, throughput, saturation, CPU, memory) from the experiment’s findings.md, using the local evidence first and a bounded number of Datadog MCP profiling/metric calls, then record the conclusion with aoc conclude. Use when asked why an agent build regressed or to explain an A/B result.
 ---
 
 # From findings.md to a conclusion
@@ -14,10 +14,10 @@ tables, a **Next** line) → the profiles → the code. Everything else is in
 
 ## Budget
 
-Local evidence first; one table usually names the cause. Then at most two
+Local evidence first; a table may identify a useful lead. Then at most two
 Datadog MCP calls per regressed signal, and only the call that signal's
 **Next** line gives, with its filters: load the `datadog/profiling` skill
-before profiling calls and `datadog/metrics` before metric queries, and
+before profiling calls and `datadog/metrics` before metric queries when available, and
 keep the `visualizationLink` the tool returns for the conclusion. Single
 values with `jq` (recipes in `.claude/rules/results.md`); never read
 `report.json`, `timeseries.csv` or a pprof file whole.
@@ -26,8 +26,9 @@ A metric on the headline because of `--watch` is context, not a signal:
 read it off `compare.md` and the section it sits under, and spend no MCP
 call on it.
 
-Stop when the cause is named at the level of "process X" or "function Y in
-package Z" and the direction of the number is explained. Another round
+Stop when the evidence supports an explanation at the level of "process X" or
+"function Y in package Z", or the budget is exhausted. Distinguish a measured
+mover from a hypothesized cause; an inconclusive result is valid. Another round
 (`./bin/aoc ab … --runs 3`) beats a fourth flame graph when a Δ is within
 a point of its threshold.
 
@@ -36,7 +37,7 @@ a point of its threshold.
 **delivery**: records lost, duplicated, orphaned or truncated on b fail
 the run (exit 3); out of order is reported and does not fail. Read the
 delivery ledger, then retries/errors/responses and the faults note. Gaps
-right after a rotation are the tailer: the streams table in
+right after a rotation suggest a tailer/rotation issue: the streams table in
 `<side>/report.md`, or
 `jq '.streams[] | select(.missing>0) | {gen,stream,missing,gaps}' <side>/report.json`.
 The agent log's top messages usually name the destination error. One MCP
@@ -48,8 +49,8 @@ injected faults against the loss.
 **throughput**: `received logs /s`. Under a paced workload the generator
 holds the rate, so this fails only when b fell short of what was
 generated: check the gate and saturation first, they normally explain it.
-Under `deterministic-bytes` (flat out, fixed record budget) it is the
-agent's maximum, and cpu or saturation says why. MCP:
+Under `deterministic-bytes` (flat out, fixed record budget), it is still a
+window average. Check that input remained active before inferring capacity. MCP:
 `get_datadog_metric` `avg:aoc.intake.logs_per_sec{experiment:<name>} by
 {variant}` beside `avg:aoc.gen.records_per_sec{experiment:<name>} by
 {variant}`. A flat generator line under a lower intake line is real.
@@ -81,7 +82,8 @@ for a.
 MCP: `explore_profiling_flame_graph` profileType=heap-live-size with that
 function as `frameRegexFilter`, then the same for a; or
 `get_datadog_metric` `avg:aoc.agent.proc.rss_bytes{experiment:<name>} by
-{variant,proc}`. A ramp is a leak, a step is a cache.
+{variant,proc}`. A ramp can be retention or backlog; a step can be caching. Test release after
+drain or repeat longer before calling either a leak or a cache.
 
 ## Into the code
 
@@ -116,11 +118,11 @@ number from the profile that it should move.
 ./bin/aoc conclude --results results/<name> --verdict fail "memory +160 %: a new python3 check runner (350 MB RSS) in the -full image; the logs pipeline itself is unchanged (core RSS, heap in use and CPU by function flat)."
 ```
 
-That writes `conclusion.md`, posts a `source:aoc` event tagged
-`experiment:<name>` and, with `DD_APP_KEY`, puts the conclusion on top of
-the notebook (without the key: `edit_datadog_notebook` with the notebook
-URL from `ab.json`, full-replace with the existing cell ids and a new
-markdown cell first). `aoc ab --compare-only` then re-renders
-`findings.md` with the conclusion under "What we tested". Report the
-conclusion to the user in two or three sentences, with the numbers from
-the brief and the links (notebook, any flame graph the MCP returned).
+That writes `conclusion.md` and posts a `source:aoc` event tagged
+`experiment:<name>`. `aoc ab --config results/<name>/aoc.yaml --compare-only`
+refreshes the local brief. It does not publish or edit a remote notebook.
+Follow [docs/notebooks.md](../../../docs/notebooks.md) to author the concise
+analysis, select evidence cells, update/create through MCP and record the URL.
+Report the conclusion in two or three sentences with the deciding numbers,
+confidence limits, links (or local paths when unpublished), and one next test.
+Do not reinterpret a failed measured gate as a pass because both sides failed.

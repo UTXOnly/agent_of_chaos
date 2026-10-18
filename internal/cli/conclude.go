@@ -32,12 +32,15 @@ func runConclude(args []string) int {
 			"  aoc conclude --results results/tag-filter --file notes.md")
 	results := fs.Str("results", "", "the experiment's results directory (the one with ab.json)")
 	file := fs.Str("file", "", "read the conclusion from this Markdown file instead of the arguments")
-	verdict := fs.Str("verdict", "", "one word for the event: pass, fail or inconclusive (default: from the text, else info)")
+	verdict := fs.Str("verdict", "", "one word for the event: pass, fail or inconclusive (default: info; does not override the measured gate)")
 	if !fs.parse(args) {
 		return 2
 	}
 	if *results == "" {
 		return fail("conclude: --results is required")
+	}
+	if *verdict != "" && *verdict != "pass" && *verdict != "fail" && *verdict != "inconclusive" {
+		return fail("conclude: --verdict must be pass, fail or inconclusive")
 	}
 	var text string
 	if *file != "" {
@@ -76,6 +79,12 @@ func runConclude(args []string) int {
 	case "inconclusive":
 		alert = "warning"
 	}
+	if nbURL := recordedNotebookURL(filepath.Join(*results, "notebook.json")); nbURL != "" {
+		fmt.Printf("notebook: %s (update its analysis through Datadog MCP; docs/notebooks.md)\n", nbURL)
+	} else {
+		fmt.Println("notebook: not published; write the analysis from conclusion.md and publish through Datadog MCP (docs/notebooks.md)")
+	}
+	fmt.Printf("refresh the local brief: aoc ab --config %s --compare-only\n", filepath.Join(*results, "aoc.yaml"))
 	client := ddapi.FromEnv()
 	if !client.Configured() {
 		fmt.Println("DD_API_KEY not set (env or .env): the conclusion was not posted to Datadog")
@@ -94,24 +103,5 @@ func runConclude(args []string) int {
 		return fail("conclude: event: %v", err)
 	}
 	fmt.Printf("posted event \"%s\" (experiment:%s)\n", ev.Title, sum.Experiment)
-	nbURL := sum.Notebook
-	if nbURL == "" {
-		if b, err := os.ReadFile(filepath.Join(*results, "notebook.url")); err == nil {
-			nbURL = strings.TrimSpace(string(b))
-		}
-	}
-	switch {
-	case nbURL == "":
-		fmt.Println("no notebook recorded for this test; `aoc ab --compare-only` (with DD_APP_KEY) creates one with the conclusion on top")
-	case client.AppKey == "":
-		fmt.Printf("notebook: %s (no DD_APP_KEY): add the conclusion as its first cell yourself (Datadog MCP edit_datadog_notebook, or `aoc conclude` again with the key)\n", nbURL)
-	default:
-		cell := "## Conclusion\n\n" + strings.TrimSpace(text) + "\n"
-		if err := client.PrependNotebookCell(ctx, ddapi.NotebookID(nbURL), cell); err != nil {
-			return fail("conclude: notebook: %v", err)
-		}
-		fmt.Printf("notebook: %s (conclusion added as the first cell)\n", nbURL)
-	}
-	fmt.Println("`aoc ab --compare-only` re-renders findings.md with the conclusion on top")
 	return 0
 }

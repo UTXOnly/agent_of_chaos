@@ -52,6 +52,11 @@ keeps p50/p99/max per second; the window quantiles are exact over all samples.
 ## Throughput
 
 Window averages: totals ÷ window length. Peaks are the busiest single second.
+Neither automatically measures maximum capacity. A paced workload fixes demand;
+`deterministic-bytes` has a fixed record budget and may finish before the window
+ends. Confirm the generators sustain demand and neither disk nor intake is the
+limit before drawing capacity conclusions. A short A/B uses medians and configured
+thresholds, not a statistical significance test.
 **Compression ratio** is decompressed payload bytes ÷ bytes on the wire (the
 whole JSON payload, tags included). "raw" bytes are payload bytes after
 decompression; message bytes (just the log text) are in the streams table.
@@ -121,8 +126,8 @@ signals. Everything else is in `compare.md`.
 
 **The delivery gate** fails when the candidate lost, duplicated, orphaned
 or truncated a record. When the baseline has the same counter, the gate
-line says so: that is the workload or the harness, not the build, but it
-still fails. Out-of-order delivery is reported in the gate line and does
+line says so: shared failure limits attribution but does not identify the
+cause. The gate still fails. Out-of-order delivery is reported in the gate line and does
 not fail it; the delivery ratio is shown beside it.
 
 | signal | metrics | sense |

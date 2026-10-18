@@ -47,6 +47,6 @@ thresholds:
 ## Results root; the brief lands in <results>/<experiment>/findings.md.
 results: results
 
-## Create the A/B notebook in Datadog. Default: true when DD_APP_KEY is
-## set; notebook.json is always written.
-# notebook: true
+## Notebook analysis is authored/published through Datadog MCP.
+## notebook.md and notebook.json are always prepared locally; no app key.
+## See docs/notebooks.md.

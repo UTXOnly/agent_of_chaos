@@ -29,7 +29,7 @@ import (
 )
 
 func init() {
-	register(command{name: "ab", short: "A/B test a build against the release on one workload (--b IMAGE)", run: runAB})
+	register(command{name: "ab", short: "compare a local change or image with a control (--b-src . or --b IMAGE)", run: runAB})
 }
 
 // ABConfig is aoc.yaml: the settings a test runs with — the control image,
@@ -50,7 +50,7 @@ type ABConfig struct {
 	B          Variant            `yaml:"b"`
 	Env        map[string]string  `yaml:"env,omitempty"`
 	Results    string             `yaml:"results"`
-	Notebook   *bool              `yaml:"notebook,omitempty"`
+	Notebook   *bool              `yaml:"notebook,omitempty"` // deprecated: accepted for saved configs; never publishes
 	Compose    []string           `yaml:"compose,omitempty"`
 	Threshold  float64            `yaml:"threshold"`            // percent; a headline change below it is noise
 	Source     string             `yaml:"source,omitempty"`     // a checkout of the agent's repository, for the code section
@@ -458,8 +458,8 @@ func runAB(args []string) int {
 			"(--b) against the control (the latest public release), on the workload\n"+
 			"--workload names, optionally for several alternating rounds. aoc.yaml\n"+
 			"holds the settings both tests share; the flags say what this one is\n"+
-			"about. Out come findings.md, compare.md, ab.json, a Datadog notebook\n"+
-			"with both agents overlaid, and metrics tagged experiment:<name>\n"+
+			"about. Out come findings.md, compare.md, ab.json, notebook evidence\n"+
+			"for Datadog MCP, and metrics tagged experiment:<name>\n"+
 			"variant:<side>.",
 		"  aoc ab --b datadog/agent-dev:my-branch-py3 --workload baseline --focus \"is the new sender slower?\"\n"+
 			"  aoc ab --b datadog/agent-dev:my-branch-py3 --b-env DD_LOGS_CONFIG_TAG_FILTERS='{\"exclude\":[\"dirname:*\"]}'\n"+
@@ -497,7 +497,7 @@ func runAB(args []string) int {
 	composeCmd := fs.Str("compose-cmd", "docker compose", "compose command")
 	intake := fs.Str("intake", "http://localhost:8282", "how this machine reaches the intake")
 	noBuild := fs.Bool("no-build", false, "do not rebuild the aoc image before the first run")
-	mkNotebook := fs.Bool("notebook", os.Getenv("DD_APP_KEY") != "", "create the A/B notebook in Datadog (default: the config's `notebook`, else when DD_APP_KEY is set; notebook.json is always written)")
+	legacyNotebook := fs.Bool("notebook", false, "deprecated: notebooks are authored and published through Datadog MCP; local evidence is always written")
 	postEvent := fs.Bool("event", false, "with --compare-only: post the finished event again (it is posted after every run by default)")
 	ddSite := fs.Str("dd-site", envOr("DD_SITE", "datadoghq.com"), "Datadog site (env DD_SITE)")
 	if !fs.parse(args) {
@@ -565,8 +565,8 @@ func runAB(args []string) int {
 			cfg.Thresholds[sig] = *threshold
 		}
 	}
-	if cfg.Notebook != nil && !flagGiven(fs, "notebook") {
-		*mkNotebook = *cfg.Notebook
+	if *legacyNotebook || (cfg.Notebook != nil && *cfg.Notebook) {
+		fmt.Fprintln(os.Stderr, "notebook: direct API publishing was removed; use Datadog MCP (docs/notebooks.md). Local evidence is always written.")
 	}
 	parallel := cfg.Parallel == nil || *cfg.Parallel
 	if *sequential {
@@ -859,12 +859,13 @@ func runAB(args []string) int {
 	opts := notebook.Options{Site: *ddSite, AppURL: ddapi.AppURLFromEnv(), Experiment: experiment, Findings: res, Name: cfg.Focus}
 	nb := notebook.ForAB(title, cols, opts)
 	nbFile := filepath.Join(root, "notebook.json")
-	nbURL, nbErr := createNotebook(context.Background(), nb, nbFile, ddapi.FromEnv(), !*mkNotebook)
+	nbRes, nbErr := saveNotebook(nb, nbFile)
+	nbURL := nbRes.URL
 
 	headline := res.Headline
 	sum := abSummary{Experiment: experiment, Focus: cfg.Focus, Config: *config, Profile: cfg.Profile.String(), Started: started, Finished: time.Now(), Notebook: nbURL,
 		Threshold: cfg.Threshold, Summary: res.Summary, Findings: res.Findings,
-		Files: map[string]string{"findings": filepath.Join(root, "findings.md"), "findings_json": filepath.Join(root, "findings.json"), "compare": filepath.Join(root, "compare.md"), "notebook": nbFile}}
+		Files: map[string]string{"findings": filepath.Join(root, "findings.md"), "findings_json": filepath.Join(root, "findings.json"), "compare": filepath.Join(root, "compare.md"), "notebook": nbFile, "notebook_brief": filepath.Join(root, "notebook.md")}}
 	if res.Findings == nil {
 		sum.Findings = []findings.Finding{}
 	}
@@ -905,16 +906,11 @@ func runAB(args []string) int {
 		fmt.Printf("  (rows that moved by 5%% or more; every metric is in compare.md)\n")
 	}
 	fmt.Printf("\n  findings: %s   (what was tested, what differed and where, the profiles and the code behind them)\n", filepath.Join(root, "findings.md"))
-	fmt.Printf("  results:  %s/ (ab.json, notebook.json, <side>/report.md, <side>/profiles/ …)\n", root)
-	switch {
-	case nbErr != nil:
-		fmt.Printf("  notebook: %v\n", nbErr)
-	case nbURL != "":
-		fmt.Printf("  notebook: %s\n", nbURL)
-	case os.Getenv("DD_APP_KEY") == "":
-		fmt.Printf("  notebook: wrote %s (no DD_APP_KEY); hand its cells to the Datadog MCP's create_datadog_notebook, or set the key and run `aoc ab --compare-only`\n", nbFile)
-	default:
-		fmt.Printf("  notebook: wrote %s (not created: notebook: false)\n", nbFile)
+	fmt.Printf("  results:  %s/ (ab.json, notebook.md, notebook.json, <side>/report.md, <side>/profiles/ …)\n", root)
+	if nbErr != nil {
+		fmt.Printf("  notebook evidence: %v\n", nbErr)
+	} else {
+		explainNotebook(nbRes)
 	}
 	if len(todo) > 0 || *postEvent {
 		if !ddapi.FromEnv().Configured() {
@@ -1041,30 +1037,6 @@ func abColumns(cfg *ABConfig, all []abRun) ([]report.Column, error) {
 		}
 	}
 	return cols, nil
-}
-
-// createNotebook writes the sidecar and, unless dryRun or without an app
-// key, creates the notebook in Datadog.
-func createNotebook(ctx context.Context, nb *notebook.Notebook, outFile string, client *ddapi.Client, dryRun bool) (string, error) {
-	if err := os.WriteFile(outFile, nb.File(), 0o644); err != nil {
-		return "", err
-	}
-	urlFile := strings.TrimSuffix(outFile, ".json") + ".url"
-	if dryRun || client == nil || client.AppKey == "" {
-		// A re-render keeps the notebook the test created.
-		if b, err := os.ReadFile(urlFile); err == nil {
-			return strings.TrimSpace(string(b)), nil
-		}
-		return "", nil
-	}
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	_, url, err := client.CreateNotebook(cctx, nb.Body())
-	if err != nil {
-		return "", err
-	}
-	os.WriteFile(urlFile, []byte(url+"\n"), 0o644)
-	return url, nil
 }
 
 func printHeadline(cols []report.Column, rows []report.HeadlineRow) {

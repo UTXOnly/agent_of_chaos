@@ -249,8 +249,8 @@ func rowFor(rows []report.HeadlineRow, metric string) (report.HeadlineRow, bool)
 // ── the gate ─────────────────────────────────────────────────────────────────
 
 // gate decides whether b delivered the workload. A counter that is non-zero
-// on both sides still fails it, but says so: that is the harness or the
-// workload rather than the build.
+// on both sides still fails it. Shared failures limit attribution; they do not
+// establish whether the cause is the harness, workload or shared agent behavior.
 func gate(in Input, res *Result) Gate {
 	g := Gate{Pass: true}
 	var fails, notes []string
@@ -265,7 +265,7 @@ func gate(in Input, res *Result) Gate {
 			g.Pass = false
 			s := fmt.Sprintf("%s %s in %s", row.Cells[1], m, in.Cols[1].Name)
 			if a > 0 {
-				s += fmt.Sprintf(" (%s in %s too: the workload or the harness, not the build)", row.Cells[0], in.Cols[0].Name)
+				s += fmt.Sprintf(" (%s in %s too: shared failure; cause not isolated)", row.Cells[0], in.Cols[0].Name)
 			}
 			fails = append(fails, s)
 		case a > 0:
@@ -1453,7 +1453,7 @@ func nextFor(topic string, in Input, res *Result) []string {
 			fn = " frameRegexFilter=\"" + fn + "\""
 		}
 		return []string{fmt.Sprintf("`explore_profiling_flame_graph` profileType=heap-live-size queryString=\"%s\" %s%s, then the same for `%s`.", scope(b), win(b), fn, scope(a)),
-			fmt.Sprintf("Trend: `get_datadog_metric` `avg:aoc.agent.proc.rss_bytes{experiment:%s} by {variant,proc}`; a ramp is a leak, a step is a cache.", in.Experiment)}
+			fmt.Sprintf("Trend: `get_datadog_metric` `avg:aoc.agent.proc.rss_bytes{experiment:%s} by {variant,proc}`; a ramp may be retention or backlog; check release after drain before calling it a leak.", in.Experiment)}
 	case "cpu":
 		fn := topFn("CPU")
 		if fn != "" {

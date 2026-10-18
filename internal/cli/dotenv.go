@@ -10,7 +10,7 @@ import (
 // environment, for keys that are not already set — the same precedence
 // docker compose gives the file. So the API key, app key and org subdomain
 // a user put in .env for the compose stack also reach the CLI's own Datadog
-// calls (events, notebooks, links) without exporting them.
+// calls and links (telemetry, events) without exporting them.
 func loadDotEnv(path string) {
 	f, err := os.Open(path)
 	if err != nil {
