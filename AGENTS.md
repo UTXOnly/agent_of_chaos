@@ -1,19 +1,58 @@
 # agent_of_chaos (aoc): instructions for coding agents
 
-`aoc` puts Datadog Agents in hard log situations (intake faults such as
-latency, dropped connections, 429/5xx and outages; hard workloads such as
-rotation storms, crashing writers, multiline floods, spikes and tag-heavy
-container fleets) against a fake intake that counts every record, then
-reports what was lost, duplicated or slowed down. Datadog is the system of
-record (metrics, events, profiles, notebooks); `results/` is the working
-copy.
+`aoc` is a local development loop for the Datadog Agent's logs pipeline,
+driven by a coding agent. The engineer states a goal (a change in their
+checkout, a flag, a version, a workload shape they are worried about); you
+shape the environment, run the experiment in Docker, read the brief, say
+what moved and in which function, and propose the next run. It
+complements the agent's CI end-to-end and performance suites rather than
+replacing them: a faster answer about the change in progress, on a laptop
+or a t4g instance.
+
+The harness puts Datadog Agents in hard log situations (intake faults
+such as latency, dropped connections, 429/5xx and outages; hard workloads
+such as rotation storms, crashing writers, multiline floods, spikes and
+tag-heavy container fleets) against a fake intake that counts every
+record, then reports what was lost, duplicated or slowed down. Datadog is
+the system of record (metrics, events, profiles, notebooks); `results/`
+is the working copy.
+
+## Leading the loop
+
+```
+goal → plan → run → read → decide → (next run | investigate → conclude | done)
+```
+
+You lead. After every run, report the verdict and say what you would run
+next and why. The `aoc` skill is the full procedure; its substance:
+
+- **Plan before running.** Two to four runs in order, each one line with
+  its purpose and wall time. A quick look is `--runs 1 --duration 2m`; a
+  decision is the config's window and rounds; a delta on its threshold is
+  `--runs 3`. `--plan` whenever anything was guessed, always with
+  `--b-src`.
+- **Shape the environment from the goal**, on the command line:
+  `--workload` for the area touched, `--set` for the shape, `--fault` for
+  the intake, `--env` / `--b-env` for the agent's settings, `--code` for
+  the packages under test, `--watch` for the metric the test is about.
+- **One run at a time**, in the background, output to a file, wait for
+  the exit. The host carries one A/B, not two.
+- **Decide from the result.** Gate failed: investigate now. A signal
+  regressed: `investigate`, then `aoc conclude`, then offer
+  `aoc ab --only b` after their fix. Within a point of the threshold:
+  another round, not an investigation. Clean: the next shape, then
+  `conclude --verdict pass`. Both sides moved the same way: the host or
+  the workload, not the build.
+- **Close with a conclusion** on the run that decided the goal, with the
+  numbers, and tell the engineer the one thing you would run next.
 
 ## Which skill
 
-| the user wants | skill | command |
+| the engineer wants | skill | command |
 |---|---|---|
-| to see how an agent behaves in a situation ("what happens when the intake is slow") | `experiment` | `aoc run --profile … [--set K=V] [--fault K=V]` |
-| to know whether their build regressed against the release, optionally under a situation | `ab-test` | `aoc ab --b IMAGE \| --b-src . [--workload …] [--set K=V] [--fault K=V] --focus "…"` |
+| a goal taken to a conclusion ("I'm working on …, help me test it", "is it ready", "keep going") | `aoc` | a plan, then the rows below in order |
+| to see how one agent behaves in a situation, or to find a knee ("what happens when the intake is slow", "how fast can it go here") | `experiment` | `aoc run --profile … [--set K=V] [--fault K=V]`, one per value for a sweep |
+| to know whether a build regressed against the release or main, optionally under a situation or with a flag | `ab-test` | `aoc ab --b IMAGE \| --b-src . [--a-src main] [--workload …] [--set K=V] [--fault K=V] [--b-env K=V] --focus "…"` |
 | to know why an A/B result came out the way it did | `investigate` | reads `findings.md`, then `aoc conclude` |
 
 ## Shaping an experiment
@@ -74,6 +113,7 @@ to make. Two calls per regressed signal is the budget.
 | what a built side came from (commit, dirty files, base) | `jq '.sides[].build' results/<name>/ab.json`; the build's output is `results/<name>/build-<side>.log` (`tail`, never `cat`) | |
 | the workload as it ran | `results/<name>/<side>/profile.yaml` | |
 | a chart or flame graph | the notebook URL in `ab.json`, or the MCP | constructing profiler URLs by hand |
+| how a session goes, turn by turn | `docs/sessions.md` | |
 
 ## Commands
 
@@ -90,6 +130,7 @@ make vet                       # go vet + gofmt check
 ./bin/aoc conclude --results results/<name> "text" [--verdict pass|fail|inconclusive]
 ./bin/aoc profiles [show NAME]                # the workloads; one resolved
 ./bin/aoc run --profile NAME|PATH [--set K=V]... [--fault K=V]... [--env K=V]... --name <run> [--plan]
+./bin/aoc compare results/x results/y         # diff single runs (a sweep's steps)
 ./bin/aoc notebook --results results/<run>    # per-run notebook
 ```
 
@@ -125,6 +166,7 @@ created with the MCP's `create_datadog_notebook`.
 
 | path | what |
 |---|---|
+| `.claude/skills/` | `aoc` (lead the loop), `ab-test`, `experiment`, `investigate` |
 | `internal/cli/profile.go` | the workload model: profile schema, `--set`, `--fault`, the compose services rendered per generator |
 | `internal/cli/ab.go`, `run.go`, `collect.go`, `conclude.go`, `build.go` | the commands; `executeRun` drives compose, measures, collects profiles and the log |
 | `internal/agentbuild/` | `aoc build` / `--b-src`: a scratch worktree of the checkout, the release's embedded Python extracted, the agent compiled in `datadog/agent-dev-env-linux` against it, the result layered on the release |
@@ -135,7 +177,7 @@ created with the MCP's `create_datadog_notebook`.
 | `internal/findings/` | classify the gate and the signals, gather evidence per signal, render `findings.md` and the event |
 | `internal/notebook/` | Datadog notebook cells (brief first, overlaid charts, table last) |
 | `profiles/` | workloads; `aoc.yaml` names the default, `--workload` picks another |
-| `docs/measurements.md`, `docs/datadog.md`, `docs/reference.md` | what every number means; what lands in Datadog; the pieces by hand, faults, gotchas |
+| `docs/sessions.md`, `docs/measurements.md`, `docs/datadog.md`, `docs/reference.md` | sessions turn by turn; what every number means; what lands in Datadog; the pieces by hand, faults, gotchas |
 
 Changing what is measured: see `.claude/rules/measurements.md` (loads when
 you open those files).
