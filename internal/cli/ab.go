@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/UTXOnly/agent_of_chaos/internal/fmtutil"
+
 	"gopkg.in/yaml.v3"
 
 	"github.com/UTXOnly/agent_of_chaos/internal/agentbuild"
@@ -641,6 +643,14 @@ func runAB(args []string) int {
 		fmt.Fprintf(os.Stderr, "  %s\n", p.Description)
 	}
 	fmt.Fprintf(os.Stderr, "  generators: %s\n  faults: %s\n", p.summary(), p.faultsSummary())
+	wall := time.Duration(cfg.Runs) * p.wallTime()
+	if !parallel {
+		wall *= 2
+	}
+	fmt.Fprintf(os.Stderr, "  wall time: about %s for the runs, plus about a minute per image built\n", fmtutil.Duration(wall.Round(time.Minute)))
+	for _, w := range p.planWarnings() {
+		fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
+	}
 	for _, sv := range []struct {
 		side string
 		v    Variant

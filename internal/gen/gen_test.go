@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,5 +210,33 @@ func TestValidate(t *testing.T) {
 	c.Name = "x-{host}"
 	if err := c.Validate(); err != nil || strings.Contains(c.Name, "{host}") {
 		t.Errorf("host expansion: %q %v", c.Name, err)
+	}
+}
+
+func TestMultilineFrames(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := 0; i < 20; i++ {
+		tr := appendStackTrace(nil, "svc", rng, 300)
+		if n := bytes.Count(tr, []byte{'\n'}); n < 300 {
+			t.Fatalf("300 frames rendered %d lines", n)
+		}
+		if len(tr) < 15<<10 {
+			t.Fatalf("300 frames rendered only %d bytes", len(tr))
+		}
+	}
+	// 0 keeps the realistic default: a handful of frames.
+	for i := 0; i < 50; i++ {
+		if n := bytes.Count(appendStackTrace(nil, "svc", rng, 0), []byte{'\n'}); n > 20 {
+			t.Fatalf("default trace has %d lines", n)
+		}
+	}
+	c := testConfig(t)
+	c.MultilineFrames, c.SpikeJitter, c.SpikeInterval = -1, 0, time.Second
+	if err := c.Validate(); err == nil {
+		t.Error("negative --multiline-frames accepted")
+	}
+	c.MultilineFrames, c.SpikeJitter = 0, 2*time.Second
+	if err := c.Validate(); err == nil {
+		t.Error("--spike-jitter >= --spike-interval accepted")
 	}
 }

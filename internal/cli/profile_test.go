@@ -5,8 +5,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/UTXOnly/agent_of_chaos/internal/gen"
 )
 
 const sampleProfile = `
@@ -207,5 +210,39 @@ func TestProfilePath(t *testing.T) {
 		if got := profilePath(in); got != want {
 			t.Errorf("profilePath(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestPlanWarnings(t *testing.T) {
+	p, err := parseProfile([]byte(`
+name: t
+duration: 2m
+generators: { plain: { streams: 1 } }
+faults:
+  - at: 45s
+    set: { error_rate: 1, error_status: 503 }
+  - at: 90s
+    clear: true
+  - at: 150s
+    set: { error_rate: 0.2, error_status: 429, flap_on_ms: 2000, flap_off_ms: 8000 }
+  - at: 180s
+    clear: true
+`), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := p.planWarnings()
+	if len(w) != 1 || !strings.Contains(w[0], "HTTP 429 20%") || !strings.Contains(w[0], "--duration 2m31s") || strings.Contains(w[0], "clear") {
+		t.Errorf("warnings = %q", w)
+	}
+	if p.wallTime() < 4*time.Minute || p.wallTime() > 5*time.Minute {
+		t.Errorf("wallTime = %s", p.wallTime())
+	}
+	p.Duration = gen.Duration(4 * time.Minute)
+	if w := p.planWarnings(); len(w) != 0 {
+		t.Errorf("full window warned: %q", w)
+	}
+	if _, err := parseProfile([]byte("name: t\nduration: 1m\ngenerators: { plain: {} }\nfaults: [{at: 0s, set: {flap_on_ms: 10}}]"), "t"); err == nil {
+		t.Error("flap without flap_off_ms accepted")
 	}
 }

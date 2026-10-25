@@ -21,11 +21,14 @@ same workload and fault flags, then follow `ab-test` from its step 2.
 | log rotation, copytruncate, file races | `rotation-churn` |
 | apps crashing, files reopened | `chaos-restarts` |
 | stack traces, multiline | `multiline-heavy` |
+| huge multi-line records, truncation, aggregation memory | `multiline-giant` |
+| random spurts, bursts at odd times | `bursty` |
 | huge lines, truncation, compression | `high-compression` |
 | traffic spike, burst, step change | `incident-scenario` |
 | container logs, lots of tags, docker labels | `tag-heavy-fleet` |
 | outage then recovery | `intake-outage` |
 | flaky network that recovers | `flaky-network` |
+| network blips at random times | `intermittent-network` |
 
 ## 2. Tune it
 
@@ -38,6 +41,8 @@ Numbers they name go on the command line, never into the profile file:
 | more containers | `--set app.replicas=30` (tag-heavy-fleet) |
 | bigger or smaller files, rotation size | `--set rotate-bytes=512KiB` |
 | more stack traces | `--set multiline-rate=0.3` |
+| bigger stack traces, "a 200 KB log" | `--set multiline-frames=300` (20–30 KiB) or `3000` (200–300 KiB, past the single-message limit) |
+| spurts, "random bursts" | `--set mode=spike,spike-jitter=15s,spike-rate=40000,spike-duration=5s` (`--set burst-size=2000` for per-stream bursts) |
 | long lines | `--set wide-line-rate=0.1 --set wide-line-bytes=16384` |
 | JSON instead of plain text | `--set format=json` |
 | stdout instead of files | `--set output=stdout` |
@@ -62,9 +67,11 @@ and the containers it would start: use it whenever you had to guess.
 | intake down the whole time | `outage=true` |
 | bad requests, rejected payloads (the agent drops these: expect loss) | `error_rate=0.1,error_status=400` |
 | slow uplink, bandwidth cap | `read_bps=500000` |
+| intermittent, "blips", "comes and goes" | add `flap_on_ms=3000,flap_off_ms=15000` to any of the above |
 
 `drop_rate` drops whole requests, not packets; say so if they mean TCP
-loss. Faults that change during the window (on at 60 s, off at 90 s) need
+loss. Random blips are `flap_on_ms`/`flap_off_ms` on the fault, no
+timeline needed. Faults that change at fixed offsets (on at 60 s, off at 90 s) need
 a `faults:` timeline: copy the closest profile to `profiles/<name>.yaml`,
 edit `faults:`, tell them the path. `intake-outage` and `flaky-network`
 already have one.
@@ -118,6 +125,7 @@ windows, one knob.
 | files per host | `streams=…` | the profile's streams |
 | containers | `app.replicas=…` (tag-heavy-fleet) | 15 |
 | stack traces | `multiline-rate=…` | 0.05 |
+| stack trace size | `multiline-frames=…` | 300 |
 | line size | `wide-line-rate=… wide-line-bytes=…` | 0.06 / 4096 |
 | the intake's bandwidth | `--fault read_bps=…` | 2000000 |
 

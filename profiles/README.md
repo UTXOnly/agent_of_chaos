@@ -53,7 +53,8 @@ Each entry is a container running `aoc generate`, named `gen-<key>` (or
 Every other key is an `aoc generate` flag, written as on the command line
 without the dashes in front: `streams`, `rate` (lines/s across the streams,
 `0` for flat out), `rotate-bytes`, `rotate-keep`, `rotate-mode`,
-`multiline-rate`, `wide-line-rate`, `wide-line-bytes`, `pad-to`,
+`multiline-rate`, `multiline-frames` (0 = 2–8 frames; 300 ≈ 25 KiB, 3000 ≈ 250 KiB),
+`wide-line-rate`, `wide-line-bytes`, `pad-to`, `burst-size`, `burst-interval`,
 `deterministic`, `seed`, `max-lines`, `mode` (`steady`, `ramp`, `chaos`,
 `spike`, `pulse`, `scenario`) and that mode's flags. `aoc generate -h`
 lists them all; an unknown key is an error before anything starts.
@@ -66,7 +67,10 @@ it notices it.
 
 Each step either sets the intake's faults (replacing the previous state)
 or clears them. Fields: `latency_ms`, `jitter_ms`, `error_rate`,
-`error_status`, `drop_rate`, `outage`, `read_bps`, `note`.
+`error_status`, `drop_rate`, `outage`, `read_bps`, `note`, and
+`flap_on_ms` with `flap_off_ms` to apply the step's faults in randomized
+episodes (about `flap_on_ms` long, about `flap_off_ms` apart, each ± 50 %)
+instead of steadily. A step at `0s` runs for the whole window.
 [docs/reference.md](../docs/reference.md) says what each one does to the
 agent. A fault for the whole window needs no profile: `--fault K=V` on
 `aoc run` and `aoc ab`.

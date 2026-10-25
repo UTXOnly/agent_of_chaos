@@ -55,6 +55,8 @@ func runIntake(args []string) int {
 	fDrop := fs.Float("fault-drop-rate", 0, "probability of closing the connection without responding")
 	fOutage := fs.Bool("fault-outage", false, "drop every request")
 	fReadBps := fs.Int64("fault-read-bps", 0, "throttle request body reads to this many bytes/s")
+	fFlapOn := fs.Int("fault-flap-on-ms", 0, "make the faults intermittent: episodes of about this many ms …")
+	fFlapOff := fs.Int("fault-flap-off-ms", 0, "… separated by quiet gaps of about this many ms (both or neither)")
 
 	fs.section("Datadog (metrics + events for every run; the system of record)")
 	ddMetrics := fs.Bool("dd-metrics", os.Getenv("DD_API_KEY") != "", "submit <prefix>.* metrics and events to Datadog (default: on when DD_API_KEY is set)")
@@ -79,7 +81,7 @@ func runIntake(args []string) int {
 	cfg.AgentTelemetryURL, cfg.TelemetryFilter, cfg.ScrapeInterval = *telemetry, *telemetryFilter, *scrape
 	cfg.DockerContainer, cfg.DockerSocket, cfg.AgentImage = *container, *socket, *image
 	cfg.ProfileForward, cfg.ProfileStoreBytes = *profileForward, *profileStore
-	cfg.Faults = intake.Faults{LatencyMs: *fLatency, JitterMs: *fJitter, ErrorRate: *fErrRate, ErrorStatus: *fErrStatus, DropRate: *fDrop, Outage: *fOutage, ReadBps: *fReadBps}
+	cfg.Faults = intake.Faults{LatencyMs: *fLatency, JitterMs: *fJitter, ErrorRate: *fErrRate, ErrorStatus: *fErrStatus, DropRate: *fDrop, Outage: *fOutage, ReadBps: *fReadBps, FlapOnMs: *fFlapOn, FlapOffMs: *fFlapOff}
 	if !cfg.Faults.Active() {
 		cfg.Faults = intake.Faults{}
 	}

@@ -12,9 +12,10 @@ runs do not establish release readiness or statistical significance.
 
 The harness puts Datadog Agents in hard log situations (intake faults
 such as latency, dropped connections, 429/5xx and outages; hard workloads
-such as rotation storms, crashing writers, multiline floods, spikes and
-tag-heavy container fleets) against a fake intake that counts every
-record, then reports what was lost, duplicated or slowed down. Datadog is
+such as rotation storms, crashing writers, multiline floods, 300 KiB
+stack traces, random spurts and tag-heavy container fleets) against a fake
+intake that counts every record, then reports what was lost, duplicated or
+slowed down. Datadog is
 the system of record (metrics, events, profiles, notebooks); `results/`
 is the working copy.
 
@@ -62,13 +63,16 @@ next and why. The `aoc` skill is the full procedure; its substance:
   their numbers; `profiles/README.md` has the format). Pick the closest.
 - Any generator setting changes on the command line: `--set rate=20000`
   for every generator, `--set json.streams=16` for one, `--set
-  app.replicas=30`; the keys are `aoc generate` flags, plus `format`,
-  `output`, `replicas`. A fault for the whole window is `--fault K=V`.
-  Neither needs a file.
+  app.replicas=30`, `--set multiline-frames=3000` for 200–300 KiB traces,
+  `--set mode=spike,spike-jitter=15s` for spurts at random times; the keys
+  are `aoc generate` flags, plus `format`, `output`, `replicas`. A fault
+  for the whole window is `--fault K=V`; `flap_on_ms=…,flap_off_ms=…` makes
+  it come and go in randomized episodes. Neither needs a file.
 - A new file only when a shape is worth keeping or faults must change over
   time (a `faults:` timeline): copy the closest profile, edit, tell the
   user the path. `aoc run --plan` / `aoc ab --plan` print the resolved
-  workload without starting anything.
+  workload, the wall time and any fault step the window will not reach,
+  without starting anything.
 - Never put a test in `aoc.yaml`: it holds what every test shares (control
   image, shared env, default workload, `runs`, per-signal `thresholds`,
   the agent checkout).

@@ -55,10 +55,10 @@ command line, run it, and read the brief.
 | what they changed | `--workload` | `--code` |
 |---|---|---|
 | tailer, file discovery, rotation | `rotation-churn`, then `chaos-restarts` | `pkg/logs/tailers`, `pkg/logs/launchers` |
-| decoder, multiline, framing, parsing | `multiline-heavy` | `pkg/logs/internal/decoder`, `pkg/logs/internal/framer`, `pkg/logs/internal/parsers` |
+| decoder, multiline, framing, parsing | `multiline-heavy`, then `multiline-giant` | `pkg/logs/internal/decoder`, `pkg/logs/internal/framer`, `pkg/logs/internal/parsers` |
 | processor, tags, message, encoding | `baseline`, `tag-heavy-fleet` for tag work | `comp/logs-library/processor`, `pkg/logs/message` |
 | compression kind or level | `high-compression` | `comp/logs-library/sender`, `pkg/logs/message` |
-| sender, destination, batching, retry, backoff | `intake-outage`, then `flaky-network` | `comp/logs-library/sender`, `comp/logs-library/client` |
+| sender, destination, batching, retry, backoff | `intake-outage`, then `flaky-network` or `intermittent-network` | `comp/logs-library/sender`, `comp/logs-library/client` |
 | container logs, docker launcher, autodiscovery | `tag-heavy-fleet` | `pkg/logs/launchers/container`, `comp/logs/agent` |
 | scheduling, sources, integrations | `baseline` | `pkg/logs/schedulers`, `pkg/logs/sources`, `comp/logs/agent` |
 | raw throughput, or "just a version bump" | `deterministic-bytes`, then `baseline` | the default |

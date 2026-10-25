@@ -34,9 +34,10 @@ The area under change picks the first two workloads and the packages:
 | they touched | run first | then | `--code` |
 |---|---|---|---|
 | tailer, rotation, file discovery, handles | `rotation-churn` | `chaos-restarts` | `pkg/logs/tailers`, `pkg/logs/launchers` |
-| decoder, multiline, framing, parsers | `multiline-heavy` | `baseline` | `pkg/logs/internal/decoder`, `…/framer`, `…/parsers` |
+| decoder, multiline, framing, parsers | `multiline-heavy` | `multiline-giant` | `pkg/logs/internal/decoder`, `…/framer`, `…/parsers` |
 | processor, tags, message, encoding | `baseline` | `tag-heavy-fleet` | `comp/logs-library/processor`, `pkg/logs/message` |
-| sender, destination, batching, retry, backoff | `intake-outage` | `flaky-network` | `comp/logs-library/sender`, `comp/logs-library/client` |
+| sender, destination, batching, retry, backoff | `intake-outage` | `flaky-network`, `intermittent-network` |
+| buffering, backpressure, pipeline sizing | `bursty` | `incident-scenario` | `comp/logs-library/sender`, `comp/logs-library/client` |
 | compression | `high-compression` | `deterministic-bytes` | `comp/logs-library/sender`, `pkg/logs/message` |
 | container launcher, autodiscovery | `tag-heavy-fleet` | `--set app.replicas=30` | `pkg/logs/launchers/container`, `comp/logs/agent` |
 | schedulers, sources, integrations | `baseline` | `chaos-restarts` | `pkg/logs/schedulers`, `pkg/logs/sources` |
@@ -64,8 +65,10 @@ Shape the environment to the goal, on the command line, never in
 | the change isolated from main | `--b-src . --a-src main` |
 | a flag's cost and benefit | same image both sides, `--b-env K=V` |
 | a setting both sides need to be fair | `--env K=V` |
-| a heavier or different shape | `--set rate=…`, `--set json.streams=…`, `--set multiline-rate=…`, `--set app.replicas=…` |
+| a heavier or different shape | `--set rate=…`, `--set json.streams=…`, `--set multiline-rate=…`, `--set multiline-frames=…`, `--set app.replicas=…` |
+| spurts at random times | `--set mode=spike,spike-jitter=…,spike-rate=…` or the `bursty` workload |
 | the intake misbehaving the whole window | `--fault latency_ms=…`, `drop_rate=…`, `error_rate=…,error_status=…`, `outage=true`, `read_bps=…` |
+| the intake misbehaving in random episodes | the same, plus `flap_on_ms=…,flap_off_ms=…` |
 | faults that change mid-window | the profile that has the timeline (`intake-outage`, `flaky-network`) or a copied profile |
 | a metric the test is about on the headline | `--watch "tag bytes per log"`, `--watch "received wire B/s"`, `--watch "e2e latency p99"` |
 | a tighter or looser bar for every signal | `--threshold N` |
@@ -75,7 +78,9 @@ Shape the environment to the goal, on the command line, never in
 
 `--plan` before the first run whenever you had to guess, and always with
 `--b-src`: it shows the checkout, the branch, the commit and the
-uncommitted files, which you check against what they said they changed.
+uncommitted files, which you check against what they said they changed,
+the wall time, and a warning when the window ends before a fault step
+(a 2 min look at `intake-outage` never reaches its 429s).
 
 ## 3. Run
 

@@ -20,6 +20,7 @@ func init() {
 type generateFlags struct {
 	name, mode, format, output, logDir, rotateMode, scenario *string
 	streams, burstSize, rotateKeep, wideBytes, padTo         *int
+	multilineFrames                                          *int
 	rampStart, rampStep, spikeStreams                        *int
 	pulseBaseStreams, pulsePeakStreams, pulsePeakBurst       *int
 	pulseCycles, emitChunk                                   *int
@@ -31,7 +32,7 @@ type generateFlags struct {
 	seed                                                     *uint64
 	duration, startDelay, burstInterval, flushInterval       *time.Duration
 	statsInterval, rampInterval, restartDelay                *time.Duration
-	spikeInterval, spikeDuration                             *time.Duration
+	spikeInterval, spikeDuration, spikeJitter                *time.Duration
 	pulseRamp, pulsePeak, pulseCooldown, pulseRest           *time.Duration
 	pulsePeakBurstInterval                                   *time.Duration
 	intake                                                   *string
@@ -61,6 +62,7 @@ func declareGenerateFlags(fs *flagSet, d gen.Config) *generateFlags {
 
 	fs.section("Content")
 	g.multiline = fs.Float("multiline-rate", d.MultilineRate, "fraction of records followed by a multi-line stack trace")
+	g.multilineFrames = fs.Int("multiline-frames", d.MultilineFrames, "frames per stack trace (0 = a realistic 2–8 at random; 300 ≈ 20–30 KiB, 3000 ≈ 200–300 KiB)")
 	g.wideRate = fs.Float("wide-line-rate", d.WideLineRate, "fraction of records followed by an oversized line")
 	g.wideBytes = fs.Int("wide-line-bytes", d.WideLineBytes, "payload size of oversized lines")
 	g.padTo = fs.Int("pad-to", d.PadTo, "pad every line to at least this many bytes (0 = natural size)")
@@ -83,6 +85,7 @@ func declareGenerateFlags(fs *flagSet, d gen.Config) *generateFlags {
 
 	fs.section("Spike mode")
 	g.spikeInterval = fs.Duration("spike-interval", d.SpikeInterval, "baseline time between spikes")
+	g.spikeJitter = fs.Duration("spike-jitter", d.SpikeJitter, "± random variation of the time between spikes (0 = periodic)")
 	g.spikeDuration = fs.Duration("spike-duration", d.SpikeDuration, "spike length")
 	g.spikeStreams = fs.Int("spike-streams", d.SpikeStreams, "extra streams during a spike")
 	g.spikeRate = fs.Float("spike-rate", d.SpikeRate, "extra lines/s during a spike")
@@ -117,11 +120,13 @@ func (g *generateFlags) config(d gen.Config) gen.Config {
 	cfg.Format, cfg.Output, cfg.LogDir = gen.Format(*g.format), gen.Output(*g.output), *g.logDir
 	cfg.RotateBytes, cfg.RotateKeep, cfg.RotateMode, cfg.FlushInterval = *g.rotateBytes, *g.rotateKeep, gen.RotateMode(*g.rotateMode), *g.flushInterval
 	cfg.MultilineRate, cfg.WideLineRate, cfg.WideLineBytes, cfg.PadTo = *g.multiline, *g.wideRate, *g.wideBytes, *g.padTo
+	cfg.MultilineFrames = *g.multilineFrames
 	cfg.Deterministic, cfg.Seed = *g.deterministic, *g.seed
 	cfg.IntakeURL, cfg.StatsInterval, cfg.Quiet = *g.intake, *g.statsInterval, *g.quiet
 	cfg.RampStart, cfg.RampStep, cfg.RampInterval = *g.rampStart, *g.rampStep, *g.rampInterval
 	cfg.ChaosCrashRate, cfg.ChaosRestartDelay = *g.crashRate, *g.restartDelay
 	cfg.SpikeInterval, cfg.SpikeDuration, cfg.SpikeStreams, cfg.SpikeRate = *g.spikeInterval, *g.spikeDuration, *g.spikeStreams, *g.spikeRate
+	cfg.SpikeJitter = *g.spikeJitter
 	cfg.PulseRamp, cfg.PulsePeak, cfg.PulseCooldown, cfg.PulseRest = *g.pulseRamp, *g.pulsePeak, *g.pulseCooldown, *g.pulseRest
 	cfg.PulseBaseStreams, cfg.PulsePeakStreams, cfg.PulseBaseRate, cfg.PulsePeakRate = *g.pulseBaseStreams, *g.pulsePeakStreams, *g.pulseBaseRate, *g.pulsePeakRate
 	cfg.PulsePeakBurstSize, cfg.PulsePeakBurstInterval, cfg.PulseCycles = *g.pulsePeakBurst, *g.pulsePeakBurstInterval, *g.pulseCycles
