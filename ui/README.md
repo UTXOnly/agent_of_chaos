@@ -34,38 +34,38 @@ checkout's default name and `results/<name>` is where the brief lands.
   delta), `--env`/`--b-env`/`--code`/`--watch`, the focus sentence and the
   name. The command card is what the server runs; paste it into a shell to
   run it by hand. **Plan** runs the same line with `--plan`.
-- **Live**: the phase track with aoc's own wall-time estimate, then
-  **Inside the logs agent**: an interactive diagram of the agent's logs
-  pipeline built only from metrics the agent exposes with telemetry on.
-  One node per component that reports `logs_component_utilization`
-  (processor and strategy per pipeline, sender, worker, destination), plus
-  the tailers and the intake. Node fill is the component's utilization
-  ratio; each node shows its buffered items and bytes. Edges are animated
-  at their measured rate (written, `logs__decoded` per pipeline,
-  `logs__processed`, payload flushes, HTTP sends, `logs__sent`); the
-  retry loop from the intake back to the destination is `logs__retry_count`;
-  a red sink under the tailer is `logs__bytes_missed`, the bytes lost to
-  rotation before the tailer read them, which is where the intake's
-  missing count comes from. A processor at 0% with a full channel while
-  its strategy is saturated is marked **blocked**: the agent stops a
-  component's busy clock while it waits to hand off, so that reading is
-  correct, not idle. Hover a node for its live numbers; click a node: what it does, what to watch,
-  sparklines of its ratio / items / bytes over the run, and the raw series
-  behind it. Under the diagram, per side: eight gauges, a **why** list of
-  rule-based sentences that name the number they came from, the counters,
-  the generators. The values in those panels are 5-second means and the
-  why lines hold for 15 seconds, so they can be read while the run moves.
-  Then twelve one-axis charts with a and b overlaid
-  (received vs written, e2e p99 with p50, rejected/s, backlog, CPU, RSS with
-  Go heap, wire vs raw bytes, busiest utilization, bytes missed on
-  rotation, retries with network errors, missing change/s, bytes held in
-  the destination vs in the pipelines); fault spans shaded, hover for
-  values. A **time cursor** sits under the phase track: live follows the
-  newest sample; drag it, click a chart, or press *peak stress* to move to
-  the most stressed second, and every panel shows that moment. The server
-  keeps a finished run's samples (`ui/.state/samples/<id>.json`), so a run
-  stays reviewable after it ends, opening at its peak. Stop sends SIGINT
-  (SIGTERM after 90 s, then SIGKILL); a second launch queues.
+- **Live**: the phase track with aoc's wall-time estimate, then, per side:
+  - **Inside the logs agent**, a diagram of the agent's logs pipeline built
+    from the metrics the agent exposes with telemetry on. One node per
+    component that reports `logs_component_utilization` (processor and
+    strategy per pipeline, sender, worker, destination), plus the tailers
+    and the intake. Node fill is the utilization ratio; each node shows its
+    buffered items and bytes. Edges animate at their measured rate; the
+    retry loop back to the destination is `logs__retry_count`; the red sink
+    under the tailer is `logs__bytes_missed`, the bytes lost to rotation
+    before the tailer read them, which is where the intake's missing count
+    comes from. A processor at 0 % with a full channel while its strategy
+    is saturated is marked **blocked**, not idle: the agent stops a
+    component's busy clock while it waits to hand off. Hover a node for its
+    live numbers; click it for what it does, what to watch, sparklines and
+    the raw series behind it.
+  - Eight gauges, a **why** list of rule-based sentences that name the
+    number they came from, the counters and the generators. These are
+    5-second means, and a why line holds for 15 seconds, so they can be
+    read while the run moves.
+  - Twelve charts with a and b overlaid (received vs written, e2e p99 with
+    p50, rejected/s, backlog, CPU, RSS with Go heap, wire vs raw bytes,
+    busiest utilization, bytes missed on rotation, retries with network
+    errors, missing change/s, bytes held in the destination vs the
+    pipelines), fault spans shaded.
+  - A **time cursor** under the phase track: live follows the newest
+    sample; drag it, click a chart, or press *peak stress* to jump to the
+    most stressed second, and every panel shows that moment. The server
+    keeps a finished run's samples (`ui/.state/samples/<id>.json`), so a
+    run opens at its peak after it ends.
+
+  Stop sends SIGINT (SIGTERM after 90 s, then SIGKILL); a second launch
+  queues.
 - **Results**: what is on disk under `results/`, with the verdict, the gate
   line and the signal deltas; opens `findings.md`, `compare.md`,
   `report.md` and the Datadog notebook link.

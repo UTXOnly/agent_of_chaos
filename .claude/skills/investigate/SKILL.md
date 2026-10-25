@@ -126,9 +126,7 @@ number from the profile that it should move.
 
 That writes `conclusion.md` and posts a `source:aoc` event tagged
 `experiment:<name>`. `aoc ab --config results/<name>/aoc.yaml --compare-only`
-refreshes the local brief. It does not publish or edit a remote notebook.
-Follow [docs/notebooks.md](../../../docs/notebooks.md) to author the concise
-analysis, select evidence cells, update/create through MCP and record the URL.
-Report the conclusion in two or three sentences with the deciding numbers,
-confidence limits, links (or local paths when unpublished), and one next test.
-Do not reinterpret a failed measured gate as a pass because both sides failed.
+refreshes the local brief. Publishing is a separate step:
+[docs/notebooks.md](../../../docs/notebooks.md). Report the conclusion in
+two or three sentences with the deciding numbers, the links (or local paths
+when unpublished) and one next test.

@@ -1,14 +1,13 @@
 # Sessions
 
-Six sessions with Claude Code in this repository, turn by turn: what the
+Seven sessions with Claude Code in this repository, turn by turn: what the
 engineer said, what Claude decided about the environment and why, the
-command it ran, what came back, and what it proposed next. The first
-session is a real run from this checkout (`results/dev-filter-all-4x`,
-notebook 15602107); the numbers in the other five are illustrative and
-show the shape of the exchange, not a measurement.
-
-Notebook publication now follows [the MCP authoring workflow](notebooks.md);
-the historical notebook reference above is retained as provenance.
+command it ran, what came back, and what it proposed next. Sessions 1 and
+7 are real runs from this checkout (`results/dev-filter-all-4x` and
+`results/agentic-smoke`); the numbers in the others are illustrative and
+show the shape of the exchange, not a measurement. Sessions 1 to 6 predate
+the web UI, so their runs show the bare `./bin/aoc` line; today Claude
+launches the same line as `ui/bin/aoc-ui run -- …` (session 7).
 
 Each session follows the same loop:
 
@@ -65,10 +64,9 @@ window yields ten periods per side.
 | out of order | 5,395 | 4,178 | −22.6 % |
 
 Delivery 99.97 % on both sides, 0 duplicates, about 3.7k missing per side.
-**The delivery gate fails.** The historical explanation was warmup rotation;
-matching counts alone do not establish that cause. Current window accounting
-excludes pre-window sequences, so validate the explanation against the recorded
-harness version and stream gaps before attributing the loss.
+**The delivery gate fails.** Matching counts on both sides point at the
+workload rather than the build, but do not name the cause; the stream gaps
+in each side's `report.md` would.
 
 **Claude's reading.** The compression ratio fell because the bytes removed
 were the most repetitive ones; wire bytes still went down, so it is not a
@@ -83,11 +81,9 @@ in place would remove it.
   "Delivery gate failed: about 3.7k missing on each side; shared-loss attribution remains unconfirmed. The filter stripped every tag (118.6 → 0 B/log) and paid for itself: core agent CPU 34.5 → 30.9 %, heap in use 104.9 → 88.2 MB, wire bytes −4 % despite compression 21.7× → 17.4×. Its own cost is tagfilter.(*Scoped).Keep at 1.7 MB/s of allocations from the per-message make([]string) at tagfilter.go:364; compacting in place would remove it."
 ```
 
-**Next, proposed.** Rerun both sides with enough rotation retention and drain
-to isolate the shared missing records. If delivery is clean, try the fleet
-shape (`tag-heavy-fleet`) to check the resource tradeoff with container tags.
-The commands above show the recommended interpretation of the historical
-numbers, not a claim that this follow-up has already run.
+**Next, proposed.** Rerun both sides with more rotation retention and a
+longer drain to isolate the shared missing records. If delivery is clean,
+`tag-heavy-fleet` checks the same tradeoff with container tags.
 
 ## 2. I changed the sender's retry backoff. Is it ready to push?
 
@@ -147,11 +143,11 @@ comes back, and both land.
 > **Engineer:** Fixed. Rerun just my side.
 
 ```bash
-./bin/aoc ab --only b
+./bin/aoc ab --config results/retry-backoff-dirty-intake-outage/aoc.yaml --only b
 ```
 
-With `--b-src .` that rebuilds b from the tree as it now is, reruns it and
-reuses a's results. Pass: 0 duplicates, out of order 312 vs 340.
+The saved config still carries `--b-src .`, so this rebuilds b from the
+tree as it now is, reruns it and reuses a's results. Pass: 0 duplicates, out of order 312 vs 340.
 
 ```bash
 ./bin/aoc conclude --results results/retry-backoff-dirty-intake-outage --verdict pass \

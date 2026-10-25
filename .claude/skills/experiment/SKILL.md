@@ -156,9 +156,6 @@ A sweep across two builds is one `aoc ab` per value with `--name
 <base>-<value>`, each judged on saturation and throughput; propose that
 only after the single-agent sweep has found the bracket.
 
-For a shared result, follow [docs/notebooks.md](../../../docs/notebooks.md).
-Save a concise local conclusion, use `notebook.md` to select evidence cells,
-and publish the authored analysis through MCP. `aoc conclude` is A/B-only;
-write `<results>/conclusion.md` directly for a single run. Missing MCP leaves
-the result usable locally. Scope capacity claims to this host and verify that
-the generator and intake are not the bottleneck.
+`aoc conclude` is A/B-only; for a single run write
+`results/<name>/conclusion.md` directly. To publish, follow
+[docs/notebooks.md](../../../docs/notebooks.md).

@@ -15,11 +15,10 @@ verify that `get_datadog_notebook`, `create_datadog_notebook` and
 change: inspect the connected schema instead of guessing arguments.
 [Datadog's tool reference](https://docs.datadoghq.com/mcp_server/tools/).
 
-`DD_API_KEY` in `.env` still ships telemetry and events. `DD_APP_KEY` is no
-longer read by `aoc`. MCP authenticates separately through the client.
-If MCP is absent or cannot write, finish the local analysis and state
-“notebook not published,” with the evidence path. Do not delay the experiment,
-claim a notebook exists, or fall back to requesting an app key.
+`DD_API_KEY` in `.env` ships telemetry and events; MCP authenticates
+separately through the client. If MCP is absent or cannot write, finish the
+local analysis and state "notebook not published" with the evidence path.
+Do not delay the experiment or claim a notebook exists.
 
 ## Write for the engineer making a decision
 
@@ -90,11 +89,5 @@ Publishing and verifying the notebook are separate from the two investigative
 MCP calls per regressed signal. If that investigation budget cannot settle the
 cause, say so and propose the next experiment.
 
-## Migration
-
-`aoc notebook` now prepares local evidence, including A/B result directories;
-`--dry-run` remains an accepted compatibility flag. `--api-key` / `--app-key`
-were removed from this command. `aoc run/ab --notebook` and the old `notebook:`
-config key remain accepted for saved commands/configs, but cannot publish;
-`true` prints a migration notice. `aoc conclude` no longer prepends notebook
-cells over HTTP. Existing notebook URLs remain usable through MCP.
+Older saved commands and configs may still carry `--notebook`,
+`--dry-run` or a `notebook:` key; they are accepted and ignored.

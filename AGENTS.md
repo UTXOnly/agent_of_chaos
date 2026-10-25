@@ -6,9 +6,8 @@ checkout, a flag, a version, a workload shape they are worried about); you
 shape the environment, run the experiment in Docker, read the brief, say
 what moved and in which function, and propose the next run. It
 provides a faster answer about the change in progress, on a laptop or a t4g
-instance. SMP also supports local runs: the distinction is the logs-specific
-hypothesis → tailored scenario → evidence → next edit workflow. Short local
-runs do not establish release readiness or statistical significance.
+instance. Short local runs do not establish release readiness or statistical
+significance; carry a real finding into SMP or the Agent's CI.
 
 The harness puts Datadog Agents in hard log situations (intake faults
 such as latency, dropped connections, 429/5xx and outages; hard workloads
@@ -161,13 +160,12 @@ intake samples, `GET /api/health` names the active run.
 and waits.
 
 Docker is required for `ab`/`run`. `.env` holds `DD_API_KEY` (never print
-or commit it) and optionally `DD_SUBDOMAIN`. `DD_APP_KEY` is no longer used.
-The coding agent writes the analysis and publishes through Datadog MCP;
-`notebook.md` indexes reusable evidence cells in `notebook.json`.
-Follow [docs/notebooks.md](docs/notebooks.md) when publishing or updating.
-Keep the local conclusion usable when MCP is unavailable; state that the
-notebook is unpublished. `aoc conclude` saves the conclusion and posts an
-event; use the saved config with `--compare-only` to refresh the local brief.
+or commit it) and optionally `DD_SUBDOMAIN`. Notebooks are written by the
+coding agent and published through Datadog MCP following
+[docs/notebooks.md](docs/notebooks.md); `notebook.md` indexes the evidence
+cells in `notebook.json`. Without MCP, finish locally and say the notebook
+is unpublished. `aoc conclude` saves the conclusion and posts an event; the
+saved config with `--compare-only` refreshes the local brief.
 
 ## Analysis quality
 
