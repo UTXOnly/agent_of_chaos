@@ -42,6 +42,11 @@ failed run (`tail -40` the log). In Claude Code, say what you changed and what
 worries you; the `aoc` skill plans the runs, runs them one at a time, reads
 each brief and proposes the next one.
 
+Prefer a form? `make ui` starts a local web UI at http://localhost:4100
+that builds the same command line, shows the plan, launches it, and watches
+the intake live (received rate, missing records, faults, agent CPU and RSS,
+per side). `make ui-stop` stops it; see `ui/README.md`.
+
 ## Put the agent in a situation
 
 Each row is one `--workload` (or `aoc run --profile`) and the knobs that shape
