@@ -19,7 +19,7 @@ and the things that trip people up.
 | `aoc notebook --results results/NAME` | Prepare evidence for MCP authoring |
 | `aoc notebook --results results/NAME --link URL` | Record the notebook URL returned by MCP |
 
-Every command takes `-h`. [First run](../README.md#first-answer-from-your-checkout),
+Every command takes `-h`. [First run](../README.md#start-here),
 [workloads and overrides](workloads.md), [MCP publishing](notebooks.md).
 
 ## What the experiment controls

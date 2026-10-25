@@ -115,14 +115,13 @@ doubled by `--sequential`. `--plan` runs directly (`./bin/aoc ab … --plan`).
 
 Exit codes: 0 delivery gate passed (performance signals may still regress); 3 the delivery gate failed (b lost, duplicated,
 orphaned or truncated records); 130 interrupted; anything else means a run
-failed: `tail -40 results/ab.log`.
+failed: `tail -40 results/<name>.log`.
 
 ## 3. Report
 
-The run's last lines name the brief (`tail -5 results/ab.log`); the
-experiment defaults to `<b tag>-<workload>`, so the first example above
-writes `results/my-branch-py3-rotation-churn/`. Read that `findings.md`
-and give a short answer to the original question using:
+The run's last lines name the brief (`tail -5 results/<name>.log`), which
+is `results/<name>/findings.md`. Read it and give a short answer to the
+original question using:
 
 1. the verdict line;
 2. every signal that moved, from the signals table: signal, metric, a, b,
@@ -145,8 +144,6 @@ trace-agent. Say so, and expect the profile and code sections to be empty.
   a change to `thresholds`, `--watch` or `--code`.
 - `--sequential` when the host cannot carry both stacks at once.
 
-A profile mover suggests a cause; it does not establish one. Shared failures do
-not cancel the gate. A reused control can be stale: rerun both sides when host,
-image or workload conditions changed. If publishing the result, follow
-[docs/notebooks.md](../../../docs/notebooks.md); author the analysis through MCP
-from the evidence, not by uploading all generated Markdown.
+A reused control can be stale: rerun both sides when the host, image or
+workload changed. To publish, follow
+[docs/notebooks.md](../../../docs/notebooks.md).

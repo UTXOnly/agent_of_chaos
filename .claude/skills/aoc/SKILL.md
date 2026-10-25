@@ -40,8 +40,8 @@ The area under change picks the first two workloads and the packages:
 | tailer, rotation, file discovery, handles | `rotation-churn` | `chaos-restarts` | `pkg/logs/tailers`, `pkg/logs/launchers` |
 | decoder, multiline, framing, parsers | `multiline-heavy` | `multiline-giant` | `pkg/logs/internal/decoder`, `…/framer`, `…/parsers` |
 | processor, tags, message, encoding | `baseline` | `tag-heavy-fleet` | `comp/logs-library/processor`, `pkg/logs/message` |
-| sender, destination, batching, retry, backoff | `intake-outage` | `flaky-network`, `intermittent-network` |
-| buffering, backpressure, pipeline sizing | `bursty` | `incident-scenario` | `comp/logs-library/sender`, `comp/logs-library/client` |
+| sender, destination, batching, retry, backoff | `intake-outage` | `flaky-network`, `intermittent-network` | `comp/logs-library/sender`, `comp/logs-library/client` |
+| buffering, backpressure, pipeline sizing | `bursty` | `incident-scenario` | `comp/logs-library/sender` |
 | compression | `high-compression` | `deterministic-bytes` | `comp/logs-library/sender`, `pkg/logs/message` |
 | container launcher, autodiscovery | `tag-heavy-fleet` | `--set app.replicas=30` | `pkg/logs/launchers/container`, `comp/logs/agent` |
 | schedulers, sources, integrations | `baseline` | `chaos-restarts` | `pkg/logs/schedulers`, `pkg/logs/sources` |
@@ -159,9 +159,6 @@ that stops short because of the host or time says what was not run.
   `datadog/metrics` before metric queries when available; surface the
   `visualizationLink` the tool returns, never a hand-built URL.
 - Numbers from the brief, not from memory; a delta you did not read is
-  not a finding.
-
-A short local pass applies to the tested scenario, not release readiness. Report
-A/B values and thresholds; separate observation from causal hypothesis. For
-`--only b`, pass the saved `--config results/<name>/aoc.yaml` and disclose reuse
-of the older control. Repeat both sides if conditions changed.
+  not a finding. Separate what was measured from what is hypothesized.
+- `--only b` takes the saved `--config results/<name>/aoc.yaml`; say that
+  the control was reused, and rerun both sides if conditions changed.

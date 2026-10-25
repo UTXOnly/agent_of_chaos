@@ -105,23 +105,12 @@ conclusion` next to it.
 
 ## Notebooks
 
-The coding agent authors and publishes the notebook through Datadog MCP.
-`aoc` writes `notebook.md` (a compact evidence index) and `notebook.json`
-(reusable cells), without making notebook API calls. Generated cells preserve
-run filters, absolute windows, A/B time shifts and profiler comparison links;
-the agent chooses the useful ones and writes a concise explanation grounded
-in `findings.md` / `report.md` and `conclusion.md`.
-
-`aoc notebook --results <dir>` prepares this evidence for a single run or
-an existing A/B. Several single-run `--results` paths prepare comparison
-cells pinned to each run's window. `aoc notebook --results <dir> --link URL`
-records the URL returned by MCP in `notebook.url` and, for A/B, `ab.json`.
-Local re-renders preserve that URL; they never modify the remote notebook.
-
-`DD_APP_KEY` is no longer used. `DD_API_KEY` still handles telemetry/events;
-MCP authenticates separately. See [notebook authoring](notebooks.md) for setup,
-summary quality, selected-cell extraction, updating without duplicate notebooks,
-and the local-only fallback when MCP is unavailable.
+`aoc` makes no notebook API calls. It writes `notebook.md` (an evidence
+index) and `notebook.json` (cells with run filters, absolute windows, A/B
+time shifts and profiler comparison links); the coding agent picks cells,
+writes the analysis and publishes through Datadog MCP, then records the
+returned URL with `aoc notebook --results <dir> --link URL`. The procedure
+is in [notebooks.md](notebooks.md).
 
 ## Turning it off
 

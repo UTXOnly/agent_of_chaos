@@ -293,9 +293,8 @@ a:
 # results: results
 
 ## Notebooks: the coding agent writes the analysis and publishes through
-## Datadog MCP. notebook.md indexes reusable cells in notebook.json.
-## No DD_APP_KEY is used. See docs/notebooks.md.
-## The old notebook: boolean is accepted for saved configs but cannot publish.
+## Datadog MCP; notebook.md indexes the evidence cells in notebook.json.
+## See docs/notebooks.md. An old `notebook:` key is accepted and ignored.
 
 ## @param compose - list of strings - optional
 ## Extra compose files stacked on docker-compose.yml for every run, e.g. the

@@ -1,19 +1,22 @@
 # agent_of_chaos (`aoc`)
 
-**The first stop for testing a Datadog Agent logs-pipeline change locally.**
-Put your working tree and a control build through the same workload and the
-same intake faults in Docker, and read what was lost, duplicated, slowed down
-or made more expensive, down to the function.
+A local test bench for changes to the Datadog Agent's logs pipeline. It
+puts your working tree and a control build through the same workload and
+the same intake faults in Docker, then reports what was lost, duplicated,
+slowed down or made more expensive, down to the function.
 
-It covers load (how fast, how many files, how many containers) and edge cases
+Workloads cover load (rate, file count, container count) and edge cases
 (huge multi-line records, random spurts, rotation races, crashing writers,
-intake outages, throttling, network blips). Every shape is one command line.
-Claude Code can lead the loop; every step is also a command you can run.
+intake outages, throttling, network blips). Every shape is one command
+line. Claude Code can lead the loop, and every step is a command you can
+run yourself.
 
 ## Start here
 
-Docker with Compose, Go 1.25+, the Agent checkout at `../datadog-agent`
-(or `DATADOG_AGENT_SRC` in `.env`), and `DD_API_KEY` in `.env` for telemetry.
+You need Docker with Compose, Go 1.25+, the Agent checkout at
+`../datadog-agent` (or `DATADOG_AGENT_SRC` in `.env`), and `DD_API_KEY` in
+`.env` so metrics and profiles land in Datadog. The web UI also needs Node
+and pnpm.
 
 ```bash
 cp .env.example .env && make build
@@ -29,24 +32,25 @@ only the branch differs between the sides.
   --focus "does my retry change lose or duplicate anything through a 503 outage and 429s?" --plan
 ```
 
-`--plan` prints the checkout, the dirty files, the resolved workload, the
-wall time, and warns when the window ends before a fault step. Remove it to
-run, in the background, output to a file. Then:
+`--plan` prints the checkout, the dirty files, the resolved workload and
+the wall time, and warns when the window ends before a fault step. Remove
+it to run. Then:
 
 ```bash
 cat results/retry-smoke/findings.md
 ```
 
 Exit 0 is clean, 3 means records were lost or duplicated, anything else is a
-failed run (`tail -40` the log). In Claude Code, say what you changed and what
-worries you; the `aoc` skill plans the runs, runs them one at a time, reads
-each brief and proposes the next one.
+failed run (`tail -40` the log).
 
-Claude launches every run through that UI (`ui/bin/aoc-ui run -- …`), so
-you watch while it waits. Prefer a form? `make ui` starts the web UI at http://localhost:4100
-that builds the same command line, shows the plan, launches it, and watches
-the intake live (received rate, missing records, faults, agent CPU and RSS,
-per side). `make ui-stop` stops it; see `ui/README.md`.
+`make ui` starts the web UI at http://localhost:4100. It builds the same
+command line from a form, shows the plan, launches the run and watches the
+intake live (received rate, missing records, faults, agent CPU and RSS, per
+side). `make ui-stop` stops it; see [ui/README.md](ui/README.md).
+
+In Claude Code, say what you changed and what worries you. The `aoc` skill
+plans the runs, launches each one through the UI (`ui/bin/aoc-ui run -- …`)
+so you can watch while it waits, reads the brief and proposes the next run.
 
 ## Put the agent in a situation
 
