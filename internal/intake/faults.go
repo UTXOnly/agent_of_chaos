@@ -27,7 +27,19 @@ type Faults struct {
 	Outage bool `json:"outage"`
 	// ReadBps throttles how fast request bodies are read (bytes/s); 0 = off.
 	// Models a saturated uplink: the agent's sends take longer and back up.
+	// Applies to HTTP bodies and to the legacy TCP stream alike.
 	ReadBps int64 `json:"read_bps"`
+	// The faults above shape HTTP responses; the legacy TCP transport has
+	// no responses, so it gets its own two. TCPResetRate is the probability
+	// of closing an agent's TCP connection after a batch of frames (the
+	// agent's next write fails and it reconnects; frames in flight are
+	// never acknowledged on TCP, so some are lost or re-sent). TCPRefuse
+	// closes every TCP connection as soon as it is accepted: a dead TCP
+	// intake. Neither touches HTTP, so `outage` with a working TCP port is
+	// the case where the agent's HTTP connectivity check fails and it
+	// falls back to TCP.
+	TCPResetRate float64 `json:"tcp_reset_rate,omitempty"`
+	TCPRefuse    bool    `json:"tcp_refuse,omitempty"`
 	// FlapOnMs and FlapOffMs make the faults above intermittent: they are
 	// applied in episodes lasting about FlapOnMs, separated by quiet gaps of
 	// about FlapOffMs, each randomized by ±50%. Random network blips rather
@@ -43,15 +55,15 @@ func (f Faults) Flapping() bool { return f.FlapOnMs > 0 && f.FlapOffMs > 0 }
 
 // Active reports whether any fault is configured.
 func (f Faults) Active() bool {
-	return f.LatencyMs > 0 || f.ErrorRate > 0 || f.DropRate > 0 || f.Outage || f.ReadBps > 0
+	return f.LatencyMs > 0 || f.ErrorRate > 0 || f.DropRate > 0 || f.Outage || f.ReadBps > 0 || f.TCPResetRate > 0 || f.TCPRefuse
 }
 
 func (f Faults) Validate() error {
 	if f.LatencyMs < 0 || f.JitterMs < 0 || f.ReadBps < 0 {
 		return fmt.Errorf("latency, jitter and read_bps must be >= 0")
 	}
-	if f.ErrorRate < 0 || f.ErrorRate > 1 || f.DropRate < 0 || f.DropRate > 1 {
-		return fmt.Errorf("error_rate and drop_rate must be within [0, 1]")
+	if f.ErrorRate < 0 || f.ErrorRate > 1 || f.DropRate < 0 || f.DropRate > 1 || f.TCPResetRate < 0 || f.TCPResetRate > 1 {
+		return fmt.Errorf("error_rate, drop_rate and tcp_reset_rate must be within [0, 1]")
 	}
 	if f.ErrorStatus != 0 && (f.ErrorStatus < 400 || f.ErrorStatus > 599) {
 		return fmt.Errorf("error_status must be a 4xx or 5xx code")
@@ -60,7 +72,7 @@ func (f Faults) Validate() error {
 		return fmt.Errorf("flap_on_ms and flap_off_ms must both be > 0 (intermittent) or both 0")
 	}
 	if f.Flapping() && !f.Active() {
-		return fmt.Errorf("flap_on_ms/flap_off_ms need a fault to flap (latency_ms, error_rate, drop_rate, outage or read_bps)")
+		return fmt.Errorf("flap_on_ms/flap_off_ms need a fault to flap (latency_ms, error_rate, drop_rate, outage, read_bps, tcp_reset_rate or tcp_refuse)")
 	}
 	return nil
 }
@@ -93,6 +105,12 @@ func (f Faults) String() string {
 	}
 	if f.ReadBps > 0 {
 		parts = append(parts, fmt.Sprintf("read %d B/s", f.ReadBps))
+	}
+	if f.TCPRefuse {
+		parts = append(parts, "TCP refused")
+	}
+	if f.TCPResetRate > 0 && !f.TCPRefuse {
+		parts = append(parts, fmt.Sprintf("TCP reset %.0f%%", f.TCPResetRate*100))
 	}
 	s := strings.Join(parts, ", ")
 	if f.Flapping() {

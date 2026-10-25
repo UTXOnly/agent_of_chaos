@@ -154,6 +154,13 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 	if s.tcpPort > 0 {
 		c.env = append(c.env, fmt.Sprintf("AOC_TCP_PORT=%d", s.tcpPort))
 	}
+	if boot := p.bootFaults(); boot != nil {
+		// In place before the agent starts: its startup decisions (the HTTP
+		// connectivity check that picks HTTP or TCP) are made under the fault.
+		body, _ := json.Marshal(boot)
+		c.env = append(c.env, "AOC_INITIAL_FAULTS="+string(body))
+		logf("faults from the agent's start: %s", describeFaults(boot))
+	}
 	if s.agent.Image != "" {
 		c.env = append(c.env, "DD_AGENT_IMAGE="+s.agent.Image)
 	}
@@ -257,6 +264,9 @@ func executeRun(ctx context.Context, s runSpec) (*report.Report, error) {
 		steps := append([]FaultStep(nil), p.Faults...)
 		sort.SliceStable(steps, func(i, j int) bool { return steps[i].At < steps[j].At })
 		for _, st := range steps {
+			if st.Boot {
+				continue // in place since the intake started
+			}
 			if st.At.D() >= p.Duration.D() {
 				logf("fault step at t+%s is beyond the %s window; skipped", st.At, p.Duration)
 				continue

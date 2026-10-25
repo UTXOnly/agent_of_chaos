@@ -1,0 +1,19 @@
+name: http-fallback
+description: The HTTP-to-TCP fallback and the upgrade back. The agent is pointed at the intake's TCP port with use_http off, which is where it decides the transport from an HTTP connectivity check at startup. The HTTP intake is in outage from before the agent starts, so the check fails and the agent starts on TCP; the outage clears at 60 s and the agent's periodic re-check (backoff capped at 30 s here) finds HTTP, restarts the logs pipeline and upgrades to HTTP. Frames in flight at startup and at the switch are the records at risk; watch lost and duplicated records, the drain, and the agent log for "HTTP connectivity failure", "Starting HTTP connectivity retry" and "Successfully upgraded to HTTP transport". The report's TCP frames count says how much went over TCP before the switch.
+duration: 4m
+warmup: 20s
+drain: 90s
+agent:
+  env:
+    DD_LOGS_CONFIG_USE_HTTP: "false"
+    DD_LOGS_CONFIG_LOGS_DD_URL: localhost:10516
+    DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+    DD_LOGS_CONFIG_HTTP_CONNECTIVITY_RETRY_INTERVAL_MAX: 30s
+generators:
+  plain: { streams: 8, rate: 5000, multiline-rate: 0 }
+  json:  { format: json, streams: 8, rate: 5000, multiline-rate: 0 }
+faults:
+  - boot: true
+    set: { outage: true, note: "HTTP intake unreachable from the agent's start; TCP is up" }
+  - at: 60s
+    clear: true

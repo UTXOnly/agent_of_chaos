@@ -44,9 +44,13 @@ type ProfileAgent struct {
 }
 
 // FaultStep is one change to the intake's faults, at an offset from the
-// start of the measured window.
+// start of the measured window, or (Boot) in place before the agent
+// starts, so that what the agent decides at startup (its HTTP connectivity
+// check, hence HTTP or TCP) is decided under the fault. A boot step holds
+// until a later step changes it.
 type FaultStep struct {
-	At    gen.Duration   `yaml:"at"`
+	At    gen.Duration   `yaml:"at,omitempty"`
+	Boot  bool           `yaml:"boot,omitempty"`
 	Set   map[string]any `yaml:"set,omitempty"`
 	Clear bool           `yaml:"clear,omitempty"`
 }
@@ -224,11 +228,34 @@ func (p *Profile) normalize() error {
 		}
 		p.Generators[name] = g
 	}
+	boots := 0
 	for i, st := range p.Faults {
 		if !st.Clear {
 			if err := checkFaults(st.Set); err != nil {
 				return fmt.Errorf("faults[%d]: %w", i, err)
 			}
+		}
+		if st.Boot {
+			boots++
+			switch {
+			case st.Clear:
+				return fmt.Errorf("faults[%d]: a boot step sets faults, it cannot clear them", i)
+			case st.At != 0:
+				return fmt.Errorf("faults[%d]: a boot step is in place before the agent starts; it takes no `at`", i)
+			case boots > 1:
+				return fmt.Errorf("faults[%d]: one boot step at most", i)
+			}
+		}
+	}
+	return nil
+}
+
+// bootFaults is the fault set in place before the agent starts, nil when
+// the timeline has no boot step.
+func (p *Profile) bootFaults() map[string]any {
+	for _, st := range p.Faults {
+		if st.Boot {
+			return st.Set
 		}
 	}
 	return nil
@@ -538,9 +565,12 @@ func (p *Profile) faultsSummary() string {
 	}
 	var parts []string
 	for _, st := range p.Faults {
-		if st.Clear {
+		switch {
+		case st.Boot:
+			parts = append(parts, describeFaults(st.Set)+" from the agent's start")
+		case st.Clear:
 			parts = append(parts, fmt.Sprintf("cleared at %s", st.At))
-		} else {
+		default:
 			parts = append(parts, fmt.Sprintf("%s at %s", describeFaults(st.Set), st.At))
 		}
 	}
@@ -553,7 +583,7 @@ func (p *Profile) faultsSummary() string {
 func (p *Profile) faultsBeyondWindow() []string {
 	var out []string
 	for _, st := range p.Faults {
-		if st.At < p.Duration || st.Clear { // the run clears faults at the window's end anyway
+		if st.Boot || st.At < p.Duration || st.Clear { // the run clears faults at the window's end anyway
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s at %s", describeFaults(st.Set), st.At))

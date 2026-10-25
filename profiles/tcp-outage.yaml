@@ -1,0 +1,19 @@
+name: tcp-outage
+description: Steady TCP load, then the intake refuses every TCP connection from 30 s to 75 s. The TCP connection manager backs off exponentially (1 s doubling to 128 s), so the agent may not notice the intake is back for a minute; the pipeline fills up behind the dead destination meanwhile. Measures what was written into connections that were closed under it, how long recovery takes after the clear, and what the backoff costs in latency.
+duration: 4m
+warmup: 20s
+drain: 150s
+agent:
+  env:
+    DD_LOGS_CONFIG_FORCE_USE_TCP: "true"
+    DD_LOGS_CONFIG_USE_HTTP: "false"
+    DD_LOGS_CONFIG_LOGS_DD_URL: localhost:10516
+    DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+generators:
+  plain: { streams: 8, rate: 5000, multiline-rate: 0 }
+  json:  { format: json, streams: 8, rate: 5000, multiline-rate: 0 }
+faults:
+  - at: 30s
+    set: { tcp_refuse: true, note: "TCP intake down" }
+  - at: 75s
+    clear: true

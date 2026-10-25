@@ -73,13 +73,18 @@ it. `./bin/aoc profiles` prints the catalog with its numbers.
 | intake down for 45 s, then throttled | `intake-outage` | `--duration 4m` to reach the 429 phase |
 | a bad uplink that recovers | `flaky-network` | `--set rate=10000` |
 | network blips at random times | `intermittent-network` | `--fault drop_rate=0.5,latency_ms=800,flap_on_ms=3000,flap_off_ms=15000` |
+| the legacy TCP transport | `tcp-forced` | `--set rate=20000`, `--env DD_LOGS_CONFIG_CONNECTION_RESET_INTERVAL=20` |
+| TCP connection resets the agent cannot see | `tcp-flaky` | `--fault tcp_reset_rate=0.1,flap_on_ms=5000,flap_off_ms=20000` |
+| TCP intake down, the connection manager's backoff | `tcp-outage` | `--duration 4m` to see the recovery |
+| HTTP down at startup: fallback to TCP, upgrade back | `http-fallback` | `--env DD_LOGS_CONFIG_HTTP_CONNECTIVITY_RETRY_INTERVAL_MAX=60s` |
 
 Any intake fault goes on any workload for the whole window with `--fault`:
 `latency_ms`, `jitter_ms`, `drop_rate` (no response), `error_rate` with
 `error_status` (429/5xx retry, other 4xx drop), `outage`, `read_bps` (slow
-uplink), and `flap_on_ms`/`flap_off_ms` to make any of them come and go in
-randomized episodes. Faults that change at fixed offsets live in a profile's
-`faults:` timeline. Any `aoc generate` flag is a `--set` key, for every
+uplink), `tcp_reset_rate` and `tcp_refuse` for the TCP transport, and
+`flap_on_ms`/`flap_off_ms` to make any of them come and go in randomized
+episodes. Faults that change at fixed offsets live in a profile's `faults:`
+timeline; a step with `boot: true` is in place before the agent starts. Any `aoc generate` flag is a `--set` key, for every
 generator or one (`json.streams=16`); `--plan` validates before anything
 starts. [Workloads and every knob](docs/workloads.md).
 

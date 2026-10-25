@@ -41,6 +41,7 @@ The area under change picks the first two workloads and the packages:
 | decoder, multiline, framing, parsers | `multiline-heavy` | `multiline-giant` | `pkg/logs/internal/decoder`, `…/framer`, `…/parsers` |
 | processor, tags, message, encoding | `baseline` | `tag-heavy-fleet` | `comp/logs-library/processor`, `pkg/logs/message` |
 | sender, destination, batching, retry, backoff | `intake-outage` | `flaky-network`, `intermittent-network` | `comp/logs-library/sender`, `comp/logs-library/client` |
+| TCP destination, connection manager, HTTP/TCP endpoint choice, the TCP-to-HTTP upgrade | `tcp-forced` | `tcp-flaky`, `tcp-outage`, `http-fallback` | `comp/logs-library/client/tcp`, `comp/logs/agent/config`, `comp/logs/agent` |
 | buffering, backpressure, pipeline sizing | `bursty` | `incident-scenario` | `comp/logs-library/sender` |
 | compression | `high-compression` | `deterministic-bytes` | `comp/logs-library/sender`, `pkg/logs/message` |
 | container launcher, autodiscovery | `tag-heavy-fleet` | `--set app.replicas=30` | `pkg/logs/launchers/container`, `comp/logs/agent` |

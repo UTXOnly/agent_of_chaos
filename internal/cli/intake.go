@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 
@@ -15,7 +16,7 @@ func runIntake(args []string) int {
 	d := intake.DefaultConfig()
 	fs := newFlagSet("intake",
 		"Stand in for the Datadog logs intake. Accepts what the Agent sends\n"+
-			"(/api/v2/logs, gzip/zstd, legacy TCP), keeps exact delivery ledgers per\n"+
+			"(/api/v2/logs, gzip/zstd, legacy TCP in protobuf or RFC 5424 framing), keeps exact delivery ledgers per\n"+
 			"stream, measures latency, scrapes the agent's own telemetry and container\n"+
 			"stats, injects faults on demand, submits everything to Datadog as aoc.*\n"+
 			"metrics/events and serves a JSON report.",
@@ -23,7 +24,7 @@ func runIntake(args []string) int {
 			"  aoc intake --agent-telemetry http://localhost:5000/telemetry --docker-container dd-agent\n"+
 			"  aoc intake --api-key $DD_API_KEY --strict         # behave like the real thing\n"+
 			"  aoc intake --fault-error-rate 0.2 --fault-error-status 503\n\n"+
-			"Point an agent at it:\n"+
+			"Point an agent at it (TCP: DD_LOGS_CONFIG_FORCE_USE_TCP=true DD_LOGS_CONFIG_USE_HTTP=false DD_LOGS_CONFIG_LOGS_DD_URL=<host>:10516 DD_LOGS_CONFIG_LOGS_NO_SSL=true):\n"+
 			"  DD_LOGS_CONFIG_LOGS_DD_URL=http://<host>:8282 DD_LOGS_CONFIG_LOGS_NO_SSL=true DD_LOGS_CONFIG_USE_HTTP=true\n"+
 			"  DD_DD_URL=http://<host>:8282   # optional: also swallow metrics/metadata → fully offline")
 
@@ -84,6 +85,14 @@ func runIntake(args []string) int {
 	cfg.Faults = intake.Faults{LatencyMs: *fLatency, JitterMs: *fJitter, ErrorRate: *fErrRate, ErrorStatus: *fErrStatus, DropRate: *fDrop, Outage: *fOutage, ReadBps: *fReadBps, FlapOnMs: *fFlapOn, FlapOffMs: *fFlapOff}
 	if !cfg.Faults.Active() {
 		cfg.Faults = intake.Faults{}
+	}
+	// A profile's boot fault step, passed through compose by aoc run.
+	if env := os.Getenv("AOC_INITIAL_FAULTS"); env != "" {
+		var f intake.Faults
+		if err := json.Unmarshal([]byte(env), &f); err != nil {
+			return fail("AOC_INITIAL_FAULTS: %v", err)
+		}
+		cfg.Faults = f
 	}
 	cfg.Retention, cfg.Verbose, cfg.Quiet, cfg.Version = *retention, *verbose, *quiet, buildVersion
 	cfg.Datadog = intake.DDConfig{Enabled: *ddMetrics, Site: *ddSite, APIKey: *ddAPIKey, Interval: *ddInterval, Prefix: *ddPrefix, Events: *ddEvents}

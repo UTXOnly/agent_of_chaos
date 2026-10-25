@@ -1,0 +1,17 @@
+name: tcp-flaky
+description: TCP over a bad link. For the whole window the intake flaps between episodes of about 5 s where it resets the agent's connection after about one batch in twenty and reads at 1 MB/s, and quiet gaps of about 20 s, both randomized ±50 %. TCP has no acknowledgement, so frames written into a connection that is then reset are gone and the agent cannot know; the reconnect retries only the payload whose write failed. Watch lost records first, then duplicates and the sender's latency during episodes.
+duration: 4m
+warmup: 20s
+drain: 90s
+agent:
+  env:
+    DD_LOGS_CONFIG_FORCE_USE_TCP: "true"
+    DD_LOGS_CONFIG_USE_HTTP: "false"
+    DD_LOGS_CONFIG_LOGS_DD_URL: localhost:10516
+    DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+generators:
+  plain: { streams: 8, rate: 5000, multiline-rate: 0 }
+  json:  { format: json, streams: 8, rate: 5000, multiline-rate: 0 }
+faults:
+  - at: 0s
+    set: { tcp_reset_rate: 0.05, read_bps: 1000000, flap_on_ms: 5000, flap_off_ms: 20000, note: "flaky TCP link" }

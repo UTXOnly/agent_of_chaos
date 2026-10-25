@@ -185,7 +185,12 @@ func (s *Server) Run(ctx context.Context) error {
 			ln.Close()
 			return fmt.Errorf("listen tcp %s: %w", s.cfg.TCPAddr, err)
 		}
-		go s.serveTCP(ctx, tcpLn)
+		// HTTP requests arriving on the TCP port (the agent's connectivity
+		// check, or its HTTP transport after an upgrade from TCP) are served
+		// by the same HTTP server, so faults apply to them the same way.
+		httpOnTCP := newConnListener(tcpLn.Addr())
+		go s.http.Serve(httpOnTCP)
+		go s.serveTCP(ctx, tcpLn, httpOnTCP)
 	}
 	if s.agent != nil {
 		if s.cfg.AgentTelemetryURL != "" {

@@ -59,7 +59,9 @@ backend's complete behavior.
 | `drop_rate` | read the request, close the connection with no response | retries; the intake never counted it, so a retry counts once |
 | `error_rate`, `error_status` | answer that status instead of 202 (default 500) | 429/5xx: retry with backoff; other 4xx: drop the batch |
 | `outage` | drop every request | the pipeline backs up and retries until it clears |
-| `read_bps` | read request bodies at this many bytes/s | a saturated uplink |
+| `read_bps` | read request bodies, and the TCP stream, at this many bytes/s | a saturated uplink |
+| `tcp_reset_rate` | TCP only: after a batch of frames, close the agent's connection with this probability | the next write fails; the agent reconnects and re-sends that payload; frames already in the socket are lost, and TCP never tells it |
+| `tcp_refuse` | TCP only: close every TCP connection as soon as it is accepted | the connection manager backs off (1 s doubling to 128 s); the pipeline fills behind the dead destination; HTTP on the same port still answers |
 | `flap_on_ms`, `flap_off_ms` | apply the faults above in episodes of about `flap_on_ms`, with gaps of about `flap_off_ms`, each drawn in [0.5, 1.5) × the value | blips at random times: retries, duplicates and latency spikes that come and go; episodes are not logged as events |
 | `note` | free text shown in events and the report | |
 
@@ -82,9 +84,55 @@ for the full drain, because the agent's retry backoff can run for minutes.
 If records are still missing when the drain ends, the report says they may
 still be buffered rather than lost.
 
-`drop_rate` drops whole HTTP requests, not packets. For TCP-level loss
-against the real intake on a Linux host, `scripts/spotty-intake.sh` adds an
-iptables rule.
+`drop_rate` drops whole HTTP requests, not packets; `tcp_reset_rate` is the
+TCP equivalent (whole connections). For packet-level loss against the real
+intake on a Linux host, `scripts/spotty-intake.sh` adds an iptables rule.
+
+A profile step with `boot: true` in place of `at:` is applied before the
+agent starts (`aoc run` passes it to the intake through compose as
+`AOC_INITIAL_FAULTS`), so the agent's startup decisions are made under it.
+
+## TCP, and the choice between HTTP and TCP
+
+The intake's second port (10516 in the container) accepts the legacy TCP
+protocol: one frame per log, the API key, a space, then the log. The agent's
+default framing (`logs_config.dev_mode_use_proto`, on) is a 4-byte length
+prefix and a protobuf record; with it off, a newline-terminated RFC
+5424-style line. The intake detects the framing from a connection's first
+byte, logs it when the connection ends, and logs a sample of anything it
+could not decode. Frames are counted into the same ledgers as HTTP logs,
+and the report shows `TCP frames / bytes`. TCP has no acknowledgement, so delivery
+on this path is what the agent happens to get through, which is the point
+of testing it.
+
+The agent is pinned to HTTP by `docker-compose.yml`
+(`DD_LOGS_CONFIG_USE_HTTP=true`, an `http://` URL on :8282). A profile's
+`agent.env` moves it:
+
+```yaml
+agent:
+  env:
+    DD_LOGS_CONFIG_FORCE_USE_TCP: "true"      # always TCP (tcp-*.yaml)
+    DD_LOGS_CONFIG_USE_HTTP: "false"
+    DD_LOGS_CONFIG_LOGS_DD_URL: localhost:10516   # host:port, no scheme
+    DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+```
+
+Without `force_use_tcp`, the agent decides at startup: it POSTs an empty
+payload to the HTTP endpoint derived from the same `logs_dd_url` and uses
+HTTP if that answers, TCP otherwise; after a fallback it re-checks HTTP with
+exponential backoff (ceiling
+`logs_config.http_connectivity_retry_interval_max`, 1 h by default) and,
+when the check passes, restarts the logs pipeline on HTTP. A URL with an
+`http://` scheme never falls back. For this to be testable, the TCP port
+also serves HTTP: a connection that opens with an HTTP request line is
+handed to the HTTP intake, faults included, so an `outage` fails the
+connectivity check while TCP frames keep flowing. `http-fallback.yaml` is
+the whole sequence: outage from boot, TCP, clear, upgrade. The agent log
+has the transitions ("HTTP connectivity failure", "Starting HTTP
+connectivity retry", "Successfully upgraded to HTTP transport"); the
+intake's log marks every TCP connection and every HTTP request on the TCP
+port.
 
 ## `aoc generate`
 

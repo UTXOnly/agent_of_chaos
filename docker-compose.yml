@@ -12,7 +12,8 @@
 #
 # Variables (aoc sets them per run): DD_AGENT_IMAGE, AOC_RUN_NAME,
 # AOC_STACK (a second stack beside the first: aoc ab runs a and b this
-# way), AOC_INTAKE_PORT / AOC_TCP_PORT, AOC_DD_TAGS, DD_TAGS.
+# way), AOC_INTAKE_PORT / AOC_TCP_PORT, AOC_INITIAL_FAULTS, AOC_DD_TAGS,
+# DD_TAGS.
 # docker-compose.offline.yml stacks on top when there is no Datadog account.
 
 name: aoc
@@ -42,6 +43,8 @@ services:
       DD_API_KEY: ${DD_API_KEY:?set DD_API_KEY in .env (or use docker-compose.offline.yml)}
       DD_SITE: ${DD_SITE:-datadoghq.com}
       AOC_DD_METRICS: ${AOC_DD_METRICS:-true}
+      # A profile's `boot: true` fault step, in place before the agent starts.
+      AOC_INITIAL_FAULTS: ${AOC_INITIAL_FAULTS:-}
     ports:
       - "${AOC_INTAKE_PORT:-8282}:8282"
       - "${AOC_TCP_PORT:-10516}:10516"

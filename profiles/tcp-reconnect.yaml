@@ -1,0 +1,15 @@
+name: tcp-reconnect
+description: TCP with the agent's own periodic reconnect. connection_reset_interval makes the TCP destination close and reopen its connection every 20 s under load, the knob used behind load balancers. Each reset is a seam where frames in the socket are at risk; watch lost and duplicated records against tcp-forced, and the sender's latency around each reconnect.
+duration: 3m
+warmup: 20s
+drain: 45s
+agent:
+  env:
+    DD_LOGS_CONFIG_FORCE_USE_TCP: "true"
+    DD_LOGS_CONFIG_USE_HTTP: "false"
+    DD_LOGS_CONFIG_LOGS_DD_URL: localhost:10516
+    DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+    DD_LOGS_CONFIG_CONNECTION_RESET_INTERVAL: "20"
+generators:
+  plain: { streams: 8, rate: 5000, multiline-rate: 0 }
+  json:  { format: json, streams: 8, rate: 5000, multiline-rate: 0 }

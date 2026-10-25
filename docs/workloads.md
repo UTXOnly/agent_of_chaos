@@ -21,6 +21,11 @@ number in it can be changed on the command line (next section).
 | `intake-outage` | the sender's buffering, retry and backoff | the `baseline` streams, 4 min | 503 to every request from 45 s to 90 s, then 20 % 429s from 150 s to 180 s | recovery time, retries and responses by status, lost or duplicated on the way back |
 | `flaky-network` | retry and delivery behavior on a bad uplink | the `baseline` streams, 4 min | from 30 s to 3 min: 10 % of requests get no response, every response delayed 300 ± 200 ms, bodies read at 500 kB/s | duplicates first, then latency and in-flight payloads |
 | `intermittent-network` | retry and dedup under blips at random times | the `baseline` streams, 4 min | whole window, flapping: episodes of ~5 s with 30 % dropped requests and 800 ± 400 ms latency, gaps of ~20 s, both randomized ± 50 % | duplicates and retries by status first, then e2e latency max and recovery after each blip |
+| `tcp-forced` | the legacy TCP transport: one uncompressed, unacknowledged frame per record | the `baseline` streams without stack traces, `force_use_tcp` pointed at the intake's TCP port, 3 min | none | delivery (TCP cannot guarantee it), CPU and wire bytes against `baseline`, TCP frames in the report |
+| `tcp-reconnect` | the TCP destination's planned reconnects | `tcp-forced` with `connection_reset_interval` 20 s, 3 min | none | lost and duplicated records at each reconnect, sender latency around them |
+| `tcp-flaky` | TCP over a bad link: connection resets the agent cannot see | `tcp-forced`, 4 min | whole window, flapping: episodes of ~5 s where one batch in twenty resets the connection and reads run at 1 MB/s, gaps of ~20 s | lost records first (frames in a reset socket are gone), then duplicates from the re-sent payload |
+| `tcp-outage` | the TCP connection manager's backoff and recovery | `tcp-forced`, 4 min, 150 s drain | every TCP connection refused from 30 s to 75 s | time to reconnect after the clear (backoff doubles to 128 s), what was written into closed connections, latency while the pipeline backs up |
+| `http-fallback` | the startup transport choice and the TCP-to-HTTP upgrade | the `baseline` streams without stack traces, `use_http` off, `logs_dd_url` on the TCP port, HTTP re-check ceiling 30 s, 4 min | HTTP outage from before the agent starts, cleared at 60 s | lost and duplicated records across the switch (the pipeline restarts), TCP frames before it, the agent log's "upgraded to HTTP transport" |
 | `tag-heavy-fleet` | tag volume in the processor and the docker launcher | 15 containers logging to stdout at 500 lines/s each, collected by the docker log driver; about 40 tags per line from 20 docker labels plus 15 host tags, 3 min | none | tag bytes per log, CPU and allocations in the processor; compare with and without `DD_LOGS_CONFIG_TAG_FILTERS` |
 
 Which one to reach for, by the code you touched:
@@ -31,6 +36,8 @@ Which one to reach for, by the code you touched:
 | the decoder, multiline, framing | `multiline-heavy` | `multiline-giant`, then `high-throughput` |
 | the processor, tags, encoding | `baseline` | `tag-heavy-fleet` |
 | the sender, batching, retry, backoff | `intake-outage` | `flaky-network`, `intermittent-network` |
+| the TCP destination, connection manager, framing | `tcp-forced` | `tcp-reconnect`, `tcp-flaky`, `tcp-outage` |
+| endpoint building, the HTTP connectivity check, the TCP-to-HTTP upgrade | `http-fallback` | `tcp-forced` as the TCP-only reference |
 | buffering, backpressure, catching up | `bursty` | `incident-scenario` |
 | compression | `high-compression` with `--watch "received wire B/s"` | `deterministic-bytes` |
 | container logs, autodiscovery | `tag-heavy-fleet --set app.replicas=30` | |
@@ -49,6 +56,7 @@ one file.
 | the size of multi-line records | `--set multiline-frames=N` | `--set multiline-frames=300` (20–30 KiB a trace), `3000` (200–300 KiB); `0` is a realistic 2–8 frames |
 | spurts at random times | `--set mode=spike` with `spike-interval`, `spike-jitter`, `spike-duration`, `spike-streams`, `spike-rate` | `--set plain.mode=spike,plain.spike-interval=30s,plain.spike-jitter=20s,plain.spike-rate=50000` |
 | the intake, for the whole window | `--fault K=V,…` | `--fault latency_ms=500,jitter_ms=200`, `--fault drop_rate=0.05`, `--fault error_rate=0.2,error_status=429`, `--fault outage=true`, `--fault read_bps=500000` |
+| the TCP transport | the `tcp-*` workloads, or the four `DD_LOGS_CONFIG_*` settings from `tcp-forced.yaml` with `--env`; `--fault tcp_reset_rate=0.05`, `--fault tcp_refuse=true` | `aoc run --profile tcp-forced --fault tcp_reset_rate=0.02,flap_on_ms=5000,flap_off_ms=30000` |
 | the intake misbehaving in random episodes | `flap_on_ms`, `flap_off_ms` on any `--fault` | `--fault drop_rate=0.5,latency_ms=800,flap_on_ms=3000,flap_off_ms=15000`: blips of about 3 s every 15 s or so, both ± 50 % |
 | an agent setting on both sides | `--env DD_…=…` | `--env DD_LOGS_CONFIG_COMPRESSION_KIND=gzip` |
 | an agent setting on the candidate only | `--b-env DD_…=…` | `--b-env DD_LOGS_CONFIG_PIPELINES=16` |
@@ -64,8 +72,10 @@ unknown key is an error before anything starts. `--plan` prints the
 resolved workload, the wall time and a warning for every fault step the
 window will not reach, then exits; it is the way to check an override.
 
-A new profile file is only needed when a shape is worth keeping or when
-faults have to change during the window (a `faults:` timeline). Copy the
+A new profile file is only needed when a shape is worth keeping, when
+faults have to change during the window (a `faults:` timeline), or when a
+fault must be in place before the agent starts (`boot: true`, the case
+for the startup transport choice in `http-fallback`). Copy the
 closest one and edit it; [profiles/README.md](../profiles/README.md) has the
 format. [aoc.yaml](../aoc.yaml) holds what every test shares: the control
 image, the default workload, the window, the rounds and the per-signal

@@ -59,6 +59,7 @@ command line, run it, and read the brief.
 | processor, tags, message, encoding | `baseline`, `tag-heavy-fleet` for tag work | `comp/logs-library/processor`, `pkg/logs/message` |
 | compression kind or level | `high-compression` | `comp/logs-library/sender`, `pkg/logs/message` |
 | sender, destination, batching, retry, backoff | `intake-outage`, then `flaky-network` or `intermittent-network` | `comp/logs-library/sender`, `comp/logs-library/client` |
+| TCP destination, connection manager, endpoint choice, the TCP-to-HTTP upgrade | `tcp-forced`, then `tcp-flaky`, `tcp-outage` or `http-fallback` | `comp/logs-library/client/tcp`, `comp/logs/agent/config`, `comp/logs/agent` |
 | container logs, docker launcher, autodiscovery | `tag-heavy-fleet` | `pkg/logs/launchers/container`, `comp/logs/agent` |
 | scheduling, sources, integrations | `baseline` | `pkg/logs/schedulers`, `pkg/logs/sources`, `comp/logs/agent` |
 | raw throughput, or "just a version bump" | `deterministic-bytes`, then `baseline` | the default |
