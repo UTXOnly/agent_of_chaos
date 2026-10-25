@@ -139,7 +139,14 @@ make vet                       # go vet + gofmt check
 ./bin/aoc compare results/x results/y         # diff single runs (a sweep's steps)
 ./bin/aoc notebook --results results/<run>    # prepare evidence for MCP authoring
 ./bin/aoc notebook --results results/<run> --link URL  # save MCP-returned URL
+make ui | ui-stop | ui-status           # the web UI at http://localhost:4100 (ui/README.md)
 ```
+
+The UI's server is the same loop over HTTP: `POST /api/runs` enqueues one
+command line, `POST /api/runs/<id>/stop` sends aoc SIGINT so it takes its
+stack down, `GET /api/events` streams phases, log lines and intake samples.
+`POST /api/shutdown` stops the server; `ui/bin/aoc-ui stop` does the same
+and waits.
 
 Docker is required for `ab`/`run`. `.env` holds `DD_API_KEY` (never print
 or commit it) and optionally `DD_SUBDOMAIN`. `DD_APP_KEY` is no longer used.
@@ -164,8 +171,9 @@ from the investigation budget.
 ## Conventions
 
 - Datadog is the record: results go there as `aoc.*` metrics, `source:aoc`
-  events, the agent's profiles and notebooks. Never build a local UI or
-  dashboard; explore with the Datadog MCP.
+  events, the agent's profiles and notebooks. Never build a local results
+  dashboard; explore with the Datadog MCP. The web UI in `ui/` is for
+  composing a run and watching it live, not for analysis.
 - Tags: `run:<name>-<side>[-<round>]` per run, `experiment:<name>` and
   `variant:<side>` across the test, on the intake's metrics/events and on
   the agent's own metrics and profiles (`service:datadog-agent`).
@@ -199,6 +207,7 @@ from the investigation budget.
 | `internal/findings/` | classify the gate and the signals, gather evidence per signal, render `findings.md` and the event |
 | `internal/notebook/` | local evidence cells and compact MCP handoff; the coding agent authors the analysis |
 | `profiles/` | workloads; `aoc.yaml` names the default, `--workload` picks another |
+| `ui/` | the web UI: a Node/TypeScript server that spawns `./bin/aoc`, streams its log and the intake's live status over SSE, and a React front end (compose a run, watch it, open the brief); `ui/bin/aoc-ui start\|stop\|status` |
 | `docs/sessions.md`, `docs/measurements.md`, `docs/datadog.md`, `docs/reference.md` | sessions turn by turn; what every number means; what lands in Datadog; the pieces by hand, faults, gotchas |
 
 Changing what is measured: see `.claude/rules/measurements.md` (loads when

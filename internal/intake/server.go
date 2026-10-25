@@ -149,6 +149,7 @@ func (s *Server) routes() {
 	// Harness API.
 	m.HandleFunc("POST "+wire.GenReportPath, s.handleGenReport)
 	m.HandleFunc("GET /harness/status", s.handleStatus)
+	m.HandleFunc("GET /harness/telemetry", s.handleTelemetry)
 	m.HandleFunc("GET /harness/timeseries", s.handleTimeseries)
 	m.HandleFunc("GET /harness/report", s.handleReport)
 	m.HandleFunc("GET /harness/faults", s.handleFaultsGet)
@@ -582,6 +583,17 @@ func (s *Server) status() *Status {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.status())
+}
+
+// handleTelemetry is the agent's own telemetry as the observer last scraped
+// it: every tracked series with its value, its rate (counters) and its mean
+// since the rebase (gauges). The web UI reads it once a second.
+func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
+	if s.agent == nil {
+		writeJSON(w, 200, []MetricSeries{})
+		return
+	}
+	writeJSON(w, 200, s.agent.series())
 }
 
 func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {

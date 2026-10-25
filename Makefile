@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test vet image ab run-baseline clean
+.PHONY: build test vet image ab run-baseline clean ui ui-stop ui-status ui-dev
 
 build: ## build ./bin/aoc
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/aoc ./cmd/aoc
@@ -22,6 +22,18 @@ ab: build ## A/B the release against B=<image> (needs docker): make ab B=datadog
 
 run-baseline: build ## the smallest end-to-end experiment (needs docker)
 	./bin/aoc run --profile profiles/baseline.yaml --name baseline
+
+ui: ## start the web UI in the background (http://localhost:4100; AOC_UI_PORT to change)
+	ui/bin/aoc-ui start
+
+ui-stop: ## stop the web UI; an active run is interrupted so aoc takes its stack down
+	ui/bin/aoc-ui stop
+
+ui-status:
+	ui/bin/aoc-ui status
+
+ui-dev: ## the UI with hot reload (vite on :5173, server on :4100), foreground
+	ui/bin/aoc-ui start --dev
 
 clean:
 	rm -rf bin results
