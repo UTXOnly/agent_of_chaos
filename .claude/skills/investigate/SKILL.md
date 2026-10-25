@@ -5,6 +5,12 @@ description: Investigate the regressions an aoc A/B test found (the delivery gat
 
 # From findings.md to a conclusion
 
+The lead of a session usually runs this through the `investigator` agent
+(`.claude/agents/investigator.md`), which follows this file and returns the
+conclusion text; the `code-reader` agent reads the diff windows for a mover.
+Run it inline when the engineer asks about one result and nothing is
+running.
+
 Input: an experiment's results directory, `results/<name>/`. Read
 `findings.md` once, fully, in its own order: the verdict line → the
 signals table (signal, metric, a, b, Δ, threshold) → the gate line → what

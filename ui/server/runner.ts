@@ -49,8 +49,38 @@ export class Runner extends EventEmitter {
     return !!this.active
   }
 
-  enqueue(req: RunRequest): RunRecord {
-    const argv = buildArgv(req)
+  get current(): RunRecord | undefined {
+    return this.active
+  }
+
+  static done(rec: RunRecord) {
+    return ['finished', 'failed', 'interrupted'].includes(rec.phase)
+  }
+
+  // Resolves when the run leaves `phase`, ends, or the timeout passes; the
+  // long poll behind GET /api/runs/:id/wait, so a script waits without sleeping.
+  waitFor(id: string, phase: string | undefined, timeoutMs: number): Promise<RunRecord | undefined> {
+    const rec = this.runs.find((r) => r.id === id)
+    if (!rec) return Promise.resolve(undefined)
+    if (Runner.done(rec) || (phase && rec.phase !== phase)) return Promise.resolve(rec)
+    return new Promise((resolve) => {
+      const onEvent = (e: ServerEvent) => {
+        if (e.type !== 'run' || e.run.id !== id) return
+        if (Runner.done(e.run) || (phase && e.run.phase !== phase)) finish()
+      }
+      const finish = () => {
+        clearTimeout(t)
+        this.off('event', onEvent)
+        resolve(rec)
+      }
+      const t = setTimeout(finish, timeoutMs)
+      this.on('event', onEvent)
+    })
+  }
+
+  // A form request becomes argv; a command line (aoc-ui run, POST {argv})
+  // arrives as argv and is run exactly as given.
+  enqueue(req: RunRequest, argv: string[] = buildArgv(req)): RunRecord {
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
     const rec: RunRecord = {
       id,

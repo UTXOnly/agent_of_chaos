@@ -106,6 +106,76 @@ export function buildArgv(r: RunRequest, plan = false): string[] {
   return a
 }
 
+// The inverse of buildArgv, for a command line an agent or a shell composed:
+// aoc's argv (run or ab first) back into the request the UI renders. Flags
+// the form does not know (--config, --only, --compare-only, --pull, …) are
+// run as given; the request only has to say what the Live view shows.
+export function parseArgv(argv: string[]): RunRequest | string {
+  const [kind, ...rest] = argv
+  if (kind !== 'run' && kind !== 'ab') return 'argv must start with run or ab'
+  const r: RunRequest = { kind, name: '', workload: '', set: [], fault: [], env: [], bEnv: [], code: [], watch: [] }
+  const lists: Record<string, string[]> = { '--set': r.set, '--fault': r.fault, '--env': r.env, '--b-env': r.bEnv, '--code': r.code, '--watch': r.watch }
+  const switches = new Set(['--sequential', '--keep', '--plan', '--compare-only', '--no-build', '--notebook', '--event'])
+  for (let i = 0; i < rest.length; i++) {
+    let flag = rest[i]
+    let val: string | undefined
+    if (!flag.startsWith('--')) return `unexpected argument ${flag}`
+    const eq = flag.indexOf('=')
+    if (eq > 0) {
+      val = flag.slice(eq + 1)
+      flag = flag.slice(0, eq)
+    }
+    if (switches.has(flag)) {
+      if (flag === '--sequential') r.sequential = true
+      if (flag === '--keep') r.keep = true
+      continue
+    }
+    if (val === undefined) val = rest[++i]
+    if (val === undefined) return `${flag} needs a value`
+    if (flag in lists) {
+      lists[flag].push(val)
+      continue
+    }
+    switch (flag) {
+      case '--name': r.name = val; break
+      case '--workload':
+      case '--profile': r.workload = val; break
+      case '--focus': r.focus = val; break
+      case '--duration': r.duration = val; break
+      case '--runs': r.runs = Number(val); break
+      case '--threshold': r.threshold = Number(val); break
+      case '--b': r.bImage = val; break
+      case '--b-src': r.bSrc = val; break
+      case '--a': r.aImage = val; break
+      case '--a-src': r.aSrc = val; break
+      case '--agent-image': r.agentImage = val; break
+      case '--config': r.config = val; break
+      default: // plumbing: aoc gets it, the form does not show it
+    }
+  }
+  return r
+}
+
+const profileName = (w: string) => path.basename(w).replace(/\.yaml$/, '')
+
+// Fill the name and workload aoc would default to, where this side can know
+// them: results/<name> is where the brief lands, so the record needs it.
+export async function completeRequest(r: RunRequest): Promise<RunRequest | string> {
+  const cfg = await readConfig()
+  if (!r.workload) r.workload = r.kind === 'run' ? 'baseline' : profileName(cfg.profile)
+  if (!r.name && r.config) {
+    const doc = YAML.parse(await fs.readFile(path.resolve(ROOT, r.config), 'utf8').catch(() => '')) ?? {}
+    if (doc.name) r.name = String(doc.name)
+  }
+  if (!r.name) {
+    if (r.kind === 'run') r.name = profileName(r.workload)
+    else if (r.bImage && !r.bSrc) r.name = `${r.bImage.split(':').pop()}-${profileName(r.workload)}`
+    else return 'add --name: with --b-src the default name depends on the checkout, and results/<name> is where the brief lands'
+  }
+  if (!/^[\w.-]{1,64}$/.test(r.name)) return 'name: letters, digits, . _ - only'
+  return r
+}
+
 export function shellLine(argv: string[]): string {
   const q = (s: string) => (/^[\w./:=,@+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
   return ['./bin/aoc', ...argv.map(q)].join(' ')

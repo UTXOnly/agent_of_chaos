@@ -48,7 +48,7 @@ command line, run it, and read the brief.
 | `--b-env K=V` | the feature flag under test: b only |
 | `--env K=V` | an agent setting both sides need for the test to be fair |
 | `--watch METRIC` | a `compare.md` metric they asked about (`e2e latency p99`, `tag bytes per log`, `received wire B/s`) back on the headline |
-| `--name NAME` | only when they name the run; the default is `<b tag>-<workload>` |
+| `--name NAME` | always, short and specific (`<change>-<workload>`): it is `results/<name>` and the UI's label |
 
 ### What changed, which workload, which packages
 
@@ -101,13 +101,17 @@ own and prints its tag.
 ```bash
 make build                                    # if ./bin/aoc is missing or stale
 mkdir -p results
-./bin/aoc ab --b … --focus "…" > results/ab.log 2>&1    # the line from step 1
+ui/bin/aoc-ui run -- ab --b … --name <name> --focus "…" > results/<name>.log 2>&1    # the line from step 1
 ```
 
-Start it in the background, output to a file, and wait for the process to
-exit. Do not poll, and do not touch Docker meanwhile: the run owns the
-`aoc-a` and `aoc-b` compose projects. Wall time is
-`runs × (warmup + duration + drain + ~2 min)`, doubled by `--sequential`.
+Through the UI, so the engineer watches it live at
+`http://localhost:4100/#live`: the wrapper starts the server if needed,
+prints each phase change, and exits with aoc's code. Always `--name`; with
+`--b-src` the server cannot guess the default. Start it in the background,
+output to a file, and wait for the process to exit. Do not poll, and do
+not touch Docker meanwhile: the run owns the `aoc-a` and `aoc-b` compose
+projects. Wall time is `runs × (warmup + duration + drain + ~2 min)`,
+doubled by `--sequential`. `--plan` runs directly (`./bin/aoc ab … --plan`).
 
 Exit codes: 0 delivery gate passed (performance signals may still regress); 3 the delivery gate failed (b lost, duplicated,
 orphaned or truncated records); 130 interrupted; anything else means a run
@@ -134,8 +138,9 @@ trace-agent. Say so, and expect the profile and code sections to be empty.
 
 ## Variations
 
-- `--config results/<name>/aoc.yaml --only b` after rebuilding the dev image: re-runs b, reuses a. With
-  `--b-src .` it rebuilds b from the tree as it now is first.
+- `--config results/<name>/aoc.yaml --only b` after a fix: re-runs b, reuses a. With
+  `--b-src .` it rebuilds b from the tree as it now is first. Through the
+  UI too: `ui/bin/aoc-ui run -- ab --config results/<name>/aoc.yaml --only b`.
 - `--config results/<name>/aoc.yaml --compare-only` re-renders the brief and local notebook evidence from disk, after
   a change to `thresholds`, `--watch` or `--code`.
 - `--sequential` when the host cannot carry both stacks at once.
