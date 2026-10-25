@@ -1,12 +1,16 @@
 package intake
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -348,9 +352,61 @@ func TestSinkAndValidate(t *testing.T) {
 }
 
 func TestTCPFrame(t *testing.T) {
-	e := parseTCPFrame(`apikey123 <46>0 2026-09-20T02:02:24.123456789Z myhost auth-service - - [dd ddsource="agent-of-chaos" ddsourcecategory="" ddtags="a:b,c:d"] 2026-09-20T02:02:24.123456Z INFO [aoc.auth-service] aoc=g/auth-service/9 hi`)
-	if e.Hostname != "myhost" || e.Service != "auth-service" || e.Source != "agent-of-chaos" || e.Tags != "a:b,c:d" || !strings.HasSuffix(e.Message, "aoc=g/auth-service/9 hi") || e.Timestamp == 0 {
+	e, ok := parseTCPFrame([]byte(`apikey123 <46>0 2026-09-20T02:02:24.123456789Z myhost auth-service - - [dd ddsource="agent-of-chaos" ddsourcecategory="" ddtags="a:b,c:d"] 2026-09-20T02:02:24.123456Z INFO [aoc.auth-service] aoc=g/auth-service/9 hi`))
+	if !ok || e.Hostname != "myhost" || e.Service != "auth-service" || e.Source != "agent-of-chaos" || e.Tags != "a:b,c:d" || !strings.HasSuffix(e.Message, "aoc=g/auth-service/9 hi") || e.Timestamp == 0 {
 		t.Errorf("tcp frame: %+v", e)
+	}
+	e, ok = parseTCPFrame(append([]byte("apikey123 "), protoLog("hello aoc=g/svc/3", "info", 1758333744123456789, "myhost", "svc", "src", "a:b", "c:d")...))
+	if !ok || e.Message != "hello aoc=g/svc/3" || e.Status != "info" || e.Timestamp != 1758333744123 || e.Hostname != "myhost" || e.Service != "svc" || e.Source != "src" || e.Tags != "a:b,c:d" {
+		t.Errorf("proto frame: %+v", e)
+	}
+	if _, ok := parseTCPFrame([]byte("apikey123 \x00\x00garbage")); ok {
+		t.Error("garbage decoded")
+	}
+}
+
+// protoLog encodes a pb.Log by hand, the way the agent's TCP transport does
+// by default.
+func protoLog(msg, status string, tsNano int64, host, service, source string, tags ...string) []byte {
+	var out []byte
+	str := func(field int, v string) {
+		out = append(out, byte(field<<3|2))
+		out = binary.AppendUvarint(out, uint64(len(v)))
+		out = append(out, v...)
+	}
+	str(1, msg)
+	str(2, status)
+	out = append(out, byte(3<<3|0))
+	out = binary.AppendUvarint(out, uint64(tsNano))
+	str(4, host)
+	str(5, service)
+	str(6, source)
+	for _, tg := range tags {
+		str(7, tg)
+	}
+	return out
+}
+
+func TestTCPLengthPrefixedFrames(t *testing.T) {
+	s, ts := newTestServer(t, Config{})
+	defer ts.Close()
+	c := tcpPair(t, s, nil)
+	for i := 1; i <= 3; i++ {
+		frame := append([]byte("key "), protoLog(fmt.Sprintf("2026-09-20T02:02:24.123456Z INFO aoc=g/svc/%d line", i), "info", time.Now().UnixNano(), "h", "svc", "src")...)
+		var hdr [4]byte
+		binary.BigEndian.PutUint32(hdr[:], uint32(len(frame)))
+		c.Write(hdr[:])
+		c.Write(frame)
+	}
+	c.Close()
+	waitFor(t, "3 proto frames", func() bool {
+		s.stats.mu.Lock()
+		defer s.stats.mu.Unlock()
+		return s.stats.tcpFrames == 3
+	})
+	rep := s.buildReport(false)
+	if rep.Delivery.Unique != 3 {
+		t.Errorf("proto frames not in the ledger: %+v", rep.Delivery)
 	}
 }
 
@@ -486,5 +542,109 @@ func TestFlappingFaults(t *testing.T) {
 	st.set(Faults{LatencyMs: 5})
 	if !st.get().Active() {
 		t.Error("a steady fault must always apply")
+	}
+}
+
+// tcpPair runs handleTCPConn on one end of a pipe and returns the other.
+func tcpPair(t *testing.T, s *Server, l *connListener) net.Conn {
+	t.Helper()
+	client, server := net.Pipe()
+	go s.handleTCPConn(context.Background(), server, l)
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestTCPPortFramesAndHTTP(t *testing.T) {
+	s, ts := newTestServer(t, Config{})
+	defer ts.Close()
+	s.http = &http.Server{Handler: s.mux}
+	l := newConnListener(&net.TCPAddr{})
+	go s.http.Serve(l)
+	defer l.Close()
+
+	// Frames are counted and parsed as logs.
+	c := tcpPair(t, s, l)
+	frame := "key <46>0 2026-09-20T02:02:24.123Z h svc - - [dd ddsource=\"x\" ddtags=\"a:b\"] aoc=g/svc/%d line %d\n"
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(c, frame, i, i)
+	}
+	c.Close()
+	waitFor(t, "3 tcp frames", func() bool {
+		s.stats.mu.Lock()
+		defer s.stats.mu.Unlock()
+		return s.stats.tcpFrames == 3
+	})
+
+	// An HTTP request on the same port is served by the HTTP intake.
+	c = tcpPair(t, s, l)
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, "GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatalf("http on the tcp port: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("healthz over the tcp port: %d", resp.StatusCode)
+	}
+
+	// Under an HTTP outage the same request gets no response, while TCP
+	// frames still flow: the agent's fallback case.
+	s.setFaults(Faults{Outage: true}, "test")
+	c = tcpPair(t, s, l)
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, "POST /api/v2/logs HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]")
+	if _, err := http.ReadResponse(bufio.NewReader(c), nil); err == nil {
+		t.Errorf("outage: the connectivity check got a response")
+	}
+	c = tcpPair(t, s, l)
+	fmt.Fprintf(c, frame, 4, 4)
+	c.Close()
+	waitFor(t, "a 4th tcp frame under an HTTP outage", func() bool {
+		s.stats.mu.Lock()
+		defer s.stats.mu.Unlock()
+		return s.stats.tcpFrames == 4
+	})
+
+	// tcp_refuse closes TCP connections and leaves HTTP alone.
+	s.setFaults(Faults{TCPRefuse: true}, "test")
+	c = tcpPair(t, s, l)
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Errorf("tcp_refuse: connection stayed open")
+	}
+	c = tcpPair(t, s, l)
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, "GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != 200 {
+		t.Errorf("tcp_refuse: HTTP on the port should still answer: %v", err)
+	}
+	s.stats.mu.Lock()
+	defer s.stats.mu.Unlock()
+	if s.stats.tcpFrames != 4 || s.stats.faultDropped < 1 {
+		t.Errorf("after tcp_refuse: frames=%d dropped=%d", s.stats.tcpFrames, s.stats.faultDropped)
+	}
+}
+
+func TestFaultsValidateTCP(t *testing.T) {
+	if err := (Faults{TCPResetRate: 1.5}).Validate(); err == nil {
+		t.Error("tcp_reset_rate 1.5 accepted")
+	}
+	if err := (Faults{TCPRefuse: true, FlapOnMs: 1000, FlapOffMs: 5000}).Validate(); err != nil {
+		t.Errorf("flapping tcp_refuse rejected: %v", err)
+	}
+	if s := (Faults{TCPResetRate: 0.05, ReadBps: 1000}).String(); s != "read 1000 B/s, TCP reset 5%" {
+		t.Errorf("String: %q", s)
 	}
 }

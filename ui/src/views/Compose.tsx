@@ -20,6 +20,8 @@ const FAULT_PRESETS = [
   { label: 'outage', value: 'outage=true' },
   { label: 'slow uplink', value: 'read_bps=500000' },
   { label: 'flapping', value: 'drop_rate=0.3,flap_on_ms=5000,flap_off_ms=20000' },
+  { label: 'TCP resets', value: 'tcp_reset_rate=0.05' },
+  { label: 'TCP refused', value: 'tcp_refuse=true' },
 ]
 const SET_PRESETS = [
   { label: 'rate 20k', value: 'rate=20000' },

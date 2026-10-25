@@ -67,13 +67,29 @@ it notices it.
 
 Each step either sets the intake's faults (replacing the previous state)
 or clears them. Fields: `latency_ms`, `jitter_ms`, `error_rate`,
-`error_status`, `drop_rate`, `outage`, `read_bps`, `note`, and
-`flap_on_ms` with `flap_off_ms` to apply the step's faults in randomized
-episodes (about `flap_on_ms` long, about `flap_off_ms` apart, each ± 50 %)
-instead of steadily. A step at `0s` runs for the whole window.
-[docs/reference.md](../docs/reference.md) says what each one does to the
-agent. A fault for the whole window needs no profile: `--fault K=V` on
-`aoc run` and `aoc ab`.
+`error_status`, `drop_rate`, `outage`, `read_bps`, `tcp_reset_rate`,
+`tcp_refuse`, `note`, and `flap_on_ms` with `flap_off_ms` to apply the
+step's faults in randomized episodes (about `flap_on_ms` long, about
+`flap_off_ms` apart, each ± 50 %) instead of steadily. A step at `0s` runs
+for the whole window. [docs/reference.md](../docs/reference.md) says what
+each one does to the agent. A fault for the whole window needs no profile:
+`--fault K=V` on `aoc run` and `aoc ab`.
+
+The HTTP faults (`latency_ms`, `error_rate`, `drop_rate`, `outage`) shape
+HTTP responses; the legacy TCP transport has none, so it gets
+`tcp_reset_rate` (close the agent's connection after a batch of frames with
+this probability) and `tcp_refuse` (close every TCP connection on accept).
+`read_bps` slows both.
+
+A step with `boot: true` instead of `at:` is in place before the agent
+starts, so what the agent decides at startup is decided under the fault.
+Its use is the transport choice: an agent pointed at the intake's TCP port
+with `DD_LOGS_CONFIG_USE_HTTP: "false"` runs an HTTP connectivity check at
+startup and falls back to TCP when it fails, then re-checks and upgrades
+back to HTTP once it passes. `outage` at boot fails the check without
+touching TCP; a later `clear` lets the upgrade happen
+(`http-fallback.yaml`). One boot step per profile; it holds until a later
+step changes it.
 
 ## Changing a profile without editing it
 

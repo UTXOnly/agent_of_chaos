@@ -16,7 +16,7 @@ interface Status {
   generated: number
   inflight: number
   faults_active: boolean
-  faults?: { note?: string; latency_ms?: number; error_rate?: number; error_status?: number; drop_rate?: number; outage?: boolean; read_bps?: number }
+  faults?: { note?: string; latency_ms?: number; error_rate?: number; error_status?: number; drop_rate?: number; outage?: boolean; read_bps?: number; tcp_reset_rate?: number; tcp_refuse?: boolean }
   window_seconds: number
   generators?: { name: string; phase: string; record_rate: number; target_rate: number; final: boolean }[]
   observer?: { proc_cpu_percent?: number; proc_rss?: number; cpu_percent?: number; mem_anon_bytes?: number; telemetry_ok?: boolean }
@@ -109,6 +109,8 @@ export class IntakePoller extends EventEmitter {
         f.error_rate && `${f.error_status ?? 'errors'} on ${Math.round(f.error_rate * 100)}%`,
         f.drop_rate && `drop ${Math.round(f.drop_rate * 100)}%`,
         f.read_bps && `read ${Math.round(f.read_bps / 1000)} kB/s`,
+        f.tcp_refuse && 'TCP refused',
+        f.tcp_reset_rate && `TCP reset ${Math.round(f.tcp_reset_rate * 100)}%`,
       ]
         .filter(Boolean)
         .join(', ')

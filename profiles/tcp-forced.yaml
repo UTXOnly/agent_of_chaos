@@ -1,0 +1,14 @@
+name: tcp-forced
+description: The legacy TCP transport under the baseline load. force_use_tcp points the agent at the intake's TCP port, so every record travels as one uncompressed, unacknowledged frame instead of a compressed HTTP batch. The TCP reference for the other tcp-* workloads; compare with baseline for the cost of TCP (CPU, wire bytes, goroutines) and check delivery, which TCP cannot guarantee. Stack traces are off so the ledger is about the transport, not multiline aggregation.
+duration: 3m
+warmup: 20s
+drain: 45s
+agent:
+  env:
+    DD_LOGS_CONFIG_FORCE_USE_TCP: "true"
+    DD_LOGS_CONFIG_USE_HTTP: "false"
+    DD_LOGS_CONFIG_LOGS_DD_URL: localhost:10516
+    DD_LOGS_CONFIG_LOGS_NO_SSL: "true"
+generators:
+  plain: { streams: 8, rate: 5000, multiline-rate: 0 }
+  json:  { format: json, streams: 8, rate: 5000, multiline-rate: 0 }

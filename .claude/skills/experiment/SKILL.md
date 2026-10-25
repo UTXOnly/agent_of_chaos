@@ -29,6 +29,10 @@ same workload and fault flags, then follow `ab-test` from its step 2.
 | outage then recovery | `intake-outage` |
 | flaky network that recovers | `flaky-network` |
 | network blips at random times | `intermittent-network` |
+| the TCP transport, "force TCP", legacy protocol | `tcp-forced` (`tcp-reconnect` for the agent's own periodic reconnect) |
+| TCP connection resets, a bad link on TCP | `tcp-flaky` |
+| TCP intake down, reconnect backoff | `tcp-outage` |
+| HTTP unreachable at startup, fallback to TCP, switch back to HTTP | `http-fallback` |
 
 ## 2. Tune it
 
@@ -69,12 +73,16 @@ and the containers it would start: use it whenever you had to guess.
 | slow uplink, bandwidth cap | `read_bps=500000` |
 | intermittent, "blips", "comes and goes" | add `flap_on_ms=3000,flap_off_ms=15000` to any of the above |
 
-`drop_rate` drops whole requests, not packets; say so if they mean TCP
-loss. Random blips are `flap_on_ms`/`flap_off_ms` on the fault, no
-timeline needed. Faults that change at fixed offsets (on at 60 s, off at 90 s) need
-a `faults:` timeline: copy the closest profile to `profiles/<name>.yaml`,
-edit `faults:`, tell them the path. `intake-outage` and `flaky-network`
-already have one.
+`drop_rate` drops whole requests, not packets; on the TCP transport the
+equivalents are `tcp_reset_rate` (whole connections) and `tcp_refuse`
+(every connection); `latency_ms` and `error_rate` do nothing to TCP, which
+has no responses. Random blips are `flap_on_ms`/`flap_off_ms` on the fault,
+no timeline needed. Faults that change at fixed offsets (on at 60 s, off at
+90 s) need a `faults:` timeline: copy the closest profile to
+`profiles/<name>.yaml`, edit `faults:`, tell them the path. `intake-outage`
+and `flaky-network` already have one. A fault the agent must boot under
+(the HTTP connectivity check that picks the transport) is a step with
+`boot: true`; `http-fallback` has one.
 
 ## 4. Run it
 

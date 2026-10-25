@@ -70,17 +70,20 @@ func TestParseProfile(t *testing.T) {
 
 func TestParseProfileErrors(t *testing.T) {
 	cases := map[string]string{
-		"no duration":     "generators: { plain: { streams: 1 } }\n",
-		"no generators":   "duration: 1m\n",
-		"old enabled key": "duration: 1m\ngenerators: { plain: { enabled: false } }\n",
-		"typo":            "duration: 1m\ngenerators: { plain: { strems: 4 } }\n",
-		"reserved":        "duration: 1m\ngenerators: { plain: { log-dir: /tmp } }\n",
-		"bad format":      "duration: 1m\ngenerators: { plain: { format: xml } }\n",
-		"bad replicas":    "duration: 1m\ngenerators: { plain: { replicas: 0 } }\n",
-		"unknown top key": "duration: 1m\ngenerators: { plain: {} }\nnotes: [x]\n",
-		"bad fault":       "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ at: 1s, set: { drop_rate: 2 } }]\n",
-		"unknown fault":   "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ at: 1s, set: { latency: 2 } }]\n",
-		"name with a dot": "duration: 1m\ngenerators: { a.b: {} }\n",
+		"no duration":      "generators: { plain: { streams: 1 } }\n",
+		"no generators":    "duration: 1m\n",
+		"old enabled key":  "duration: 1m\ngenerators: { plain: { enabled: false } }\n",
+		"typo":             "duration: 1m\ngenerators: { plain: { strems: 4 } }\n",
+		"reserved":         "duration: 1m\ngenerators: { plain: { log-dir: /tmp } }\n",
+		"bad format":       "duration: 1m\ngenerators: { plain: { format: xml } }\n",
+		"bad replicas":     "duration: 1m\ngenerators: { plain: { replicas: 0 } }\n",
+		"unknown top key":  "duration: 1m\ngenerators: { plain: {} }\nnotes: [x]\n",
+		"bad fault":        "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ at: 1s, set: { drop_rate: 2 } }]\n",
+		"unknown fault":    "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ at: 1s, set: { latency: 2 } }]\n",
+		"name with a dot":  "duration: 1m\ngenerators: { a.b: {} }\n",
+		"boot with at":     "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ boot: true, at: 1s, set: { outage: true } }]\n",
+		"boot that clears": "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ boot: true, clear: true }]\n",
+		"two boot steps":   "duration: 1m\ngenerators: { plain: {} }\nfaults: [{ boot: true, set: { outage: true } }, { boot: true, set: { tcp_refuse: true } }]\n",
 	}
 	for name, src := range cases {
 		if _, err := parseProfile([]byte(src), "x"); err == nil {
@@ -244,5 +247,22 @@ faults:
 	}
 	if _, err := parseProfile([]byte("name: t\nduration: 1m\ngenerators: { plain: {} }\nfaults: [{at: 0s, set: {flap_on_ms: 10}}]"), "t"); err == nil {
 		t.Error("flap without flap_off_ms accepted")
+	}
+}
+
+func TestBootFaultStep(t *testing.T) {
+	src := "duration: 2m\ngenerators: { plain: {} }\nfaults:\n  - boot: true\n    set: { outage: true, note: \"HTTP down\" }\n  - at: 60s\n    clear: true\n"
+	p, err := parseProfile([]byte(src), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := p.bootFaults(); b == nil || b["outage"] != true {
+		t.Errorf("bootFaults = %v", b)
+	}
+	if s := p.faultsSummary(); s != "2 steps: outage (HTTP down) from the agent's start, cleared at 1m0s" {
+		t.Errorf("summary: %s", s)
+	}
+	if out := p.faultsBeyondWindow(); len(out) != 0 {
+		t.Errorf("boot step reported beyond the window: %v", out)
 	}
 }

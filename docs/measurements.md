@@ -198,7 +198,10 @@ Requests by status (what *we* answered), payload sizes on the wire and
 decompressed, logs per payload (the agent's batching), encodings, agent
 version/origin headers, connectivity probes (`{}`), malformed payloads,
 rejections (403 bad key, 413 too large, 400 in `--strict`), injected faults,
-and every non-logs path the agent hit.
+and every non-logs path the agent hit. `TCP frames / bytes` is the legacy
+transport's share: frames are counted into the same delivery ledgers, and
+a TCP connection the intake reset or refused under a fault counts as
+`dropped` alongside dropped HTTP requests.
 
 ## Tags
 
