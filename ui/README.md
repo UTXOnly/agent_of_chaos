@@ -7,11 +7,21 @@ stays the record for analysis; this is for setting a run up and watching it.
 
 ```bash
 make ui            # build if needed, start in the background, print the URL
-make ui-status     # pid, port, whether a run is active
+make ui-status     # pid, port, the active run and its phase
 make ui-stop       # stop; an active run is interrupted so aoc takes its stack down
+ui/bin/aoc-ui run -- ab --b-src . --workload rotation-churn --name tailer-rotation   # launch through the UI, wait, exit with aoc's code
+ui/bin/aoc-ui stop-run   # interrupt the active run; aoc takes its stack down
 ui/bin/aoc-ui clean   # stop and remove ui/.state (run history and logs)
 make ui-dev        # hot reload: vite on :5173, server on :4100, foreground
 ```
+
+`aoc-ui run -- <aoc args>` is how Claude launches every run, so the person
+who stated the goal can watch it at `/#live` while the agent waits for the
+exit: it starts the server if needed, posts the command line, prints the
+live URL and each phase change, and exits with aoc's own code (0 clean,
+3 delivery gate failed, 130 interrupted). The command line is run as given;
+`--name` is required with `--b-src`, since the server cannot know the
+checkout's default name and `results/<name>` is where the brief lands.
 
 `AOC_UI_PORT` changes the port (default 4100). The server binds to
 127.0.0.1 only.
@@ -69,10 +79,11 @@ Everything the UI does is plain HTTP on the same port:
 
 | call | effect |
 |---|---|
-| `GET /api/health` | `{ok, pid, busy}` |
+| `GET /api/health` | `{ok, pid, busy, active: {id, name, kind, phase, phaseSince, resultsDir} \| null}` |
 | `GET /api/profiles`, `GET /api/config` | the workloads, `aoc.yaml` and host checks |
 | `POST /api/plan` | body: a `RunRequest` (`ui/shared/types.ts`); returns aoc's `--plan` output |
-| `POST /api/runs` | enqueue; `GET /api/runs` lists; `GET /api/runs/:id/log` the full log |
+| `POST /api/runs` | enqueue a `RunRequest`, or `{argv: ["ab", "--b-src", ".", …]}` run as given; `GET /api/runs` lists; `GET /api/runs/:id` one record; `GET /api/runs/:id/log` the full log |
+| `GET /api/runs/:id/wait?phase=P&timeout=60` | long poll: the record (plus `done`) once the phase leaves `P`, the run ends, or the timeout (max 120 s) passes |
 | `POST /api/runs/:id/stop[?force=1]` | SIGINT (or SIGKILL) |
 | `GET /api/events` | SSE: `hello`, `run`, `log`, `intake`, `docker` events |
 | `GET /api/results`, `GET /api/results/:name/findings.md` | the working copy on disk |

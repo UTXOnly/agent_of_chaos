@@ -8,7 +8,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { RunRequest, RunSamples, ServerEvent } from '../shared/types.ts'
 import { IntakePoller } from './intake.ts'
-import { ROOT, STATE, aocContainers, cleanupStacks, listProfiles, listResults, plan, readConfig, readResultFile } from './repo.ts'
+import { ROOT, STATE, aocContainers, cleanupStacks, completeRequest, listProfiles, listResults, parseArgv, plan, readConfig, readResultFile } from './repo.ts'
 import { Runner } from './runner.ts'
 
 const PORT = Number(process.env.AOC_UI_PORT ?? 4100)
@@ -63,7 +63,17 @@ setInterval(async () => {
 
 const app = new Hono()
 
-app.get('/api/health', (c) => c.json({ ok: true, pid: process.pid, root: ROOT, busy: runner.busy, uptime: process.uptime() }))
+app.get('/api/health', (c) => {
+  const cur = runner.current
+  return c.json({
+    ok: true,
+    pid: process.pid,
+    root: ROOT,
+    busy: runner.busy,
+    uptime: process.uptime(),
+    active: cur ? { id: cur.id, name: cur.request.name, kind: cur.request.kind, phase: cur.phase, phaseSince: cur.phaseSince, resultsDir: cur.resultsDir } : null,
+  })
+})
 app.get('/api/config', async (c) => c.json(await readConfig()))
 app.get('/api/profiles', async (c) => c.json(await listProfiles()))
 app.get('/api/results', async (c) => c.json(await listResults()))
@@ -119,12 +129,34 @@ app.post('/api/plan', async (c) => {
 })
 
 app.get('/api/runs', (c) => c.json(runner.runs))
+// Two bodies: the form's RunRequest, or {argv: ["ab", "--b-src", ".", …]}
+// for a command line composed by an agent or a shell (ui/bin/aoc-ui run).
 app.post('/api/runs', async (c) => {
-  const v = validate(await c.req.json())
+  const body = (await c.req.json()) as { argv?: unknown }
+  let argv: string[] | undefined
+  let v: RunRequest | string
+  if (Array.isArray(body.argv)) {
+    argv = body.argv.map(String)
+    v = parseArgv(argv)
+    if (typeof v !== 'string') v = await completeRequest(v)
+  } else {
+    v = validate(body)
+  }
   if (typeof v === 'string') return c.json({ error: v }, 400)
   const cfg = await readConfig()
   if (!cfg.aocBinary) return c.json({ error: 'bin/aoc is missing: run `make build` in the repo root' }, 412)
-  return c.json(runner.enqueue(v), 201)
+  return c.json(runner.enqueue(v, argv), 201)
+})
+app.get('/api/runs/:id', (c) => {
+  const rec = runner.runs.find((r) => r.id === c.req.param('id'))
+  return rec ? c.json(rec) : c.json({ error: 'not found' }, 404)
+})
+// Long poll: returns the record once it leaves ?phase=, ends, or after
+// ?timeout= seconds (default 60, max 120). `done` says whether it is over.
+app.get('/api/runs/:id/wait', async (c) => {
+  const timeout = Math.min(120, Math.max(1, Number(c.req.query('timeout') ?? 60))) * 1000
+  const rec = await runner.waitFor(c.req.param('id'), c.req.query('phase') || undefined, timeout)
+  return rec ? c.json({ ...rec, done: Runner.done(rec) }) : c.json({ error: 'not found' }, 404)
 })
 app.post('/api/runs/:id/stop', (c) => {
   const force = c.req.query('force') === '1'

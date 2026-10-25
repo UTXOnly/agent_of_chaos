@@ -37,8 +37,10 @@ next and why. The `aoc` skill is the full procedure; its substance:
   `--workload` for the area touched, `--set` for the shape, `--fault` for
   the intake, `--env` / `--b-env` for the agent's settings, `--code` for
   the packages under test, `--watch` for the metric the test is about.
-- **One run at a time**, in the background, output to a file, wait for
-  the exit. The host carries one A/B, not two.
+- **One run at a time, through the UI**: `ui/bin/aoc-ui run -- ab|run …
+  --name <name>` in the background, output to a file, wait for the exit.
+  The engineer watches at http://localhost:4100/#live and steers between
+  runs. The host carries one A/B, not two.
 - **Decide from the result.** Gate failed: investigate now. A signal
   regressed: `investigate`, then `aoc conclude`, then offer
   `aoc ab --only b` after their fix. Within a point of the threshold:
@@ -55,7 +57,9 @@ next and why. The `aoc` skill is the full procedure; its substance:
 | a goal taken to a conclusion ("I'm working on …, help me test it", "is it ready", "keep going") | `aoc` | a plan, then the rows below in order |
 | to see how one agent behaves in a situation, or to find a knee ("what happens when the intake is slow", "how fast can it go here") | `experiment` | `aoc run --profile … [--set K=V] [--fault K=V]`, one per value for a sweep |
 | to know whether a build regressed against the release or main, optionally under a situation or with a flag | `ab-test` | `aoc ab --b IMAGE \| --b-src . [--a-src main] [--workload …] [--set K=V] [--fault K=V] [--b-env K=V] --focus "…"` |
-| to know why an A/B result came out the way it did | `investigate` | reads `findings.md`, then `aoc conclude` |
+| to know why an A/B result came out the way it did | `investigate` (usually the `investigator` agent) | reads `findings.md`, then `aoc conclude` |
+| where things stand, what is running | `status` | `.claude/hooks/session-context.sh` |
+| to stop the run in progress | `stop` | `ui/bin/aoc-ui stop-run` |
 
 ## Shaping an experiment
 
@@ -81,10 +85,13 @@ next and why. The `aoc` skill is the full procedure; its substance:
   uncommitted changes included; `--a-src main` builds the control the same
   way so only the branch differs. About a minute per build after the first.
 
-Run `aoc run` and `aoc ab` in the background with output to a file and wait
-for the exit; do not poll. Both sides of an A/B run at once, so a round
-takes warmup + window + drain + about 2 minutes. Exit 3 means records were
-lost or duplicated.
+Launch `aoc run` and `aoc ab` through `ui/bin/aoc-ui run -- …` in the
+background with output to a file and wait for the exit; do not poll. Both
+sides of an A/B run at once, so a round takes warmup + window + drain +
+about 2 minutes. Exit 3 means records were lost or duplicated. Hooks refuse
+a bare `./bin/aoc ab|run` (except `--plan`), a second concurrent run, and
+`cat` on `report.json`, `timeseries.csv`, `notebook.json`, pprof and agent
+logs.
 
 ## The A/B verdict
 
@@ -127,6 +134,8 @@ to make. Two calls per regressed signal is the budget.
 make build                     # ./bin/aoc
 make test                      # go test ./...
 make vet                       # go vet + gofmt check
+ui/bin/aoc-ui run -- ab|run <the flags below> --name NAME   # the same run, launched through the UI; exits with aoc's code
+ui/bin/aoc-ui status | stop-run                              # the active run and its phase; interrupt it cleanly
 ./bin/aoc ab --b IMAGE | --b-src .|REF [--a IMAGE | --a-src REF] [--workload NAME|PATH]
               [--set K=V]... [--fault K=V]... [--env K=V]... [--b-env K=V]...
               [--focus TEXT] [--code PKG]... [--watch METRIC]...
@@ -143,8 +152,11 @@ make ui | ui-stop | ui-status           # the web UI at http://localhost:4100 (u
 ```
 
 The UI's server is the same loop over HTTP: `POST /api/runs` enqueues one
-command line, `POST /api/runs/<id>/stop` sends aoc SIGINT so it takes its
-stack down, `GET /api/events` streams phases, log lines and intake samples.
+command line (`{argv: ["ab", …]}` or the form's request),
+`GET /api/runs/<id>/wait?phase=&timeout=` long-polls until the phase
+changes or the run ends, `POST /api/runs/<id>/stop` sends aoc SIGINT so it
+takes its stack down, `GET /api/events` streams phases, log lines and
+intake samples, `GET /api/health` names the active run.
 `POST /api/shutdown` stops the server; `ui/bin/aoc-ui stop` does the same
 and waits.
 
@@ -196,7 +208,10 @@ from the investigation budget.
 
 | path | what |
 |---|---|
-| `.claude/skills/` | `aoc` (lead the loop), `ab-test`, `experiment`, `investigate` |
+| `.claude/skills/` | `aoc` (lead the loop), `ab-test`, `experiment`, `investigate`, `status`, `stop` |
+| `.claude/agents/` | `investigator` (findings.md → conclusion text), `code-reader` (a mover's diff windows), `notebook-author` (publish through Datadog MCP) |
+| `.claude/hooks/`, `.claude/settings.json` | the session briefing; guards: one run at a time, launches through the UI, no whole-file reads, settings files guarded |
+| `.claude/rules/` | context by path: results, measurements, UI, settings, the agent-side pieces |
 | `internal/cli/profile.go` | the workload model: profile schema, `--set`, `--fault`, the compose services rendered per generator |
 | `internal/cli/ab.go`, `run.go`, `collect.go`, `conclude.go`, `build.go` | the commands; `executeRun` drives compose, measures, collects profiles and the log |
 | `internal/agentbuild/` | `aoc build` / `--b-src`: a scratch worktree of the checkout, the release's embedded Python extracted, the agent compiled in `datadog/agent-dev-env-linux` against it, the result layered on the release |
@@ -207,7 +222,7 @@ from the investigation budget.
 | `internal/findings/` | classify the gate and the signals, gather evidence per signal, render `findings.md` and the event |
 | `internal/notebook/` | local evidence cells and compact MCP handoff; the coding agent authors the analysis |
 | `profiles/` | workloads; `aoc.yaml` names the default, `--workload` picks another |
-| `ui/` | the web UI: a Node/TypeScript server that spawns `./bin/aoc`, streams its log and the intake's live status over SSE, and a React front end (compose a run, watch it, open the brief); `ui/bin/aoc-ui start\|stop\|status` |
+| `ui/` | the web UI: a Node/TypeScript server that spawns `./bin/aoc`, streams its log and the intake's live status over SSE, and a React front end (compose a run, watch it, open the brief); `ui/bin/aoc-ui start\|stop\|status\|run\|stop-run` |
 | `docs/sessions.md`, `docs/measurements.md`, `docs/datadog.md`, `docs/reference.md` | sessions turn by turn; what every number means; what lands in Datadog; the pieces by hand, faults, gotchas |
 
 Changing what is measured: see `.claude/rules/measurements.md` (loads when

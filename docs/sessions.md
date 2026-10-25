@@ -313,3 +313,46 @@ the drop window. Two calls, budget spent, cause named.
 > flame graph link is in the conclusion. Dropping the encoded bytes after
 > the first send and re-encoding on retry trades CPU for this memory;
 > `deterministic-bytes` would measure that trade if you make the change.
+
+## 7. State the goal, watch the UI (real, this checkout)
+
+> **Engineer:** I'm going to change how the tailer handles truncation. Set
+> things up so I can watch; I'll read the results.
+
+**Claude's plan.** The session opens with the briefing the SessionStart
+hook prints: Docker up, no leftover stacks, the UI on :4100 with no run
+active, the agent checkout on `main` with no uncommitted files, the last
+results and which of them have no conclusion. Nothing is under test yet,
+so the first run is a smoke that proves the host and the path: one agent,
+`baseline`, a 1 minute window, launched through the UI.
+
+```bash
+ui/bin/aoc-ui run -- run --profile baseline --duration 1m --name agentic-smoke > results/agentic-smoke.log 2>&1
+```
+
+Claude tells the engineer the run is live at `http://localhost:4100/#live`
+and about four minutes long, then waits for the exit; the wrapper's log
+shows the phases as the UI shows them:
+
+```text
+aoc-ui: queued agentic-smoke as run mvnu35ng-u4cq · watch at http://localhost:4100/#live · results/agentic-smoke
+08:58:40 aoc-ui: up
+08:59:07 aoc-ui: warmup
+08:59:27 aoc-ui: window
+09:00:30 aoc-ui: draining
+09:01:09 aoc-ui: finished
+aoc-ui: finished, exit 0 · results/agentic-smoke
+```
+
+**What came back.** 601,774 records generated, 601,774 delivered, 0 lost,
+0 duplicated, 625 out of order; core agent CPU 16 % avg, RSS max 251 MB.
+The UI kept the samples, so the run opens at its peak afterwards.
+
+**Next, proposed.** The host is good for the real question. When the
+truncation change is in the working tree: `rotation-churn` with both sides
+built from the checkout, as in session 5, launched the same way so the
+copytruncate half can be watched losing or not losing lines as it rotates.
+A hook refuses a second run while this one is up, a bare `./bin/aoc ab`
+that the UI would not see, and `cat` on the files that do not fit in a
+context window; the engineer sees the same run in the browser that Claude
+is waiting on.

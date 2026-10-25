@@ -81,14 +81,16 @@ already have one.
 ```bash
 make build
 mkdir -p results
-./bin/aoc run --profile <workload> [--set …] [--fault …] [--agent-image IMAGE] \
+ui/bin/aoc-ui run -- run --profile <workload> [--set …] [--fault …] [--agent-image IMAGE] \
   --name <short-name> > results/<short-name>.log 2>&1
 ```
 
-`--agent-image` defaults to `datadog/agent:7`. Profiles run 3 to 5
-minutes; `--duration 2m` for a first look. Start it in the background with
-output to that file and wait for it to exit; do not poll and do not touch
-Docker meanwhile. Exit 0 is clean. Exit 3 means records were lost or
+Through the UI, so the engineer watches the pipeline diagram and the
+charts live at `http://localhost:4100/#live`; the wrapper prints each
+phase change and exits with aoc's code. `--agent-image` defaults to
+`datadog/agent:7`. Profiles run 3 to 5 minutes; `--duration 2m` for a
+first look. Start it in the background with output to that file and wait
+for it to exit; do not poll and do not touch Docker meanwhile. Exit 0 is clean. Exit 3 means records were lost or
 duplicated, which is often the finding they were after, not an error.
 Anything else is a failed run: `tail -40` the log.
 
@@ -130,8 +132,8 @@ windows, one knob.
 | the intake's bandwidth | `--fault read_bps=…` | 2000000 |
 
 ```bash
-./bin/aoc run --profile high-throughput --set rate=100000 --duration 2m --name knee-100k
-./bin/aoc run --profile high-throughput --set rate=150000 --duration 2m --name knee-150k
+ui/bin/aoc-ui run -- run --profile high-throughput --set rate=100000 --duration 2m --name knee-100k
+ui/bin/aoc-ui run -- run --profile high-throughput --set rate=150000 --duration 2m --name knee-150k
 ./bin/aoc compare results/knee-100k results/knee-150k
 ```
 

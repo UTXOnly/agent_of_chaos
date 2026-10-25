@@ -28,6 +28,7 @@ export interface RunRequest {
   sequential?: boolean
   keep?: boolean
   threshold?: number
+  config?: string // a saved results/<name>/aoc.yaml (--config), command-line launches only
 }
 
 export type Phase =

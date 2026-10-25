@@ -15,7 +15,11 @@ goal → plan → run → read → decide → (next run | investigate → conclu
 ```
 
 One run at a time. The machine carries both sides of one A/B, not two
-A/Bs; queueing runs costs the engineer the chance to redirect.
+A/Bs; queueing runs costs the engineer the chance to redirect. The
+engineer watches in the UI and steers between runs; you do everything
+else, including the reading and the conclusion. `status` says where
+things stand when a session resumes; `stop` ends a run cleanly when the
+goal changes.
 
 ## 1. Understand the goal
 
@@ -85,9 +89,20 @@ the wall time, and a warning when the window ends before a fault step
 ## 3. Run
 
 Hand each run to `ab-test` (two sides) or `experiment` (one agent, a
-situation, or a sweep) from their step 2: background, output to a file,
-wait for the exit, do not poll, do not touch Docker meanwhile. Tell the
-engineer what is running and how long it takes, once.
+situation, or a sweep) from their step 2. Every run goes through the UI so
+the engineer can watch it, always with `--name`:
+
+```bash
+ui/bin/aoc-ui run -- ab --b-src . --a-src main --workload intake-outage --name backoff-outage \
+  --code comp/logs-library/sender --focus "…" > results/backoff-outage.log 2>&1
+```
+
+Background, output to a file, wait for the exit, do not poll, do not touch
+Docker meanwhile. The wrapper starts the server if needed, prints the live
+URL (`http://localhost:4100/#live`) and each phase change, and exits with
+aoc's code. Tell the engineer what is running, the URL and how long it
+takes, once. A hook refuses a bare `./bin/aoc ab|run` and a second
+concurrent run; `--plan` runs anywhere.
 
 ## 4. Read and decide
 
@@ -97,8 +112,8 @@ line, and the notebook URL if published (otherwise the local evidence path). The
 
 | the result | the next step |
 |---|---|
-| gate failed on b | investigate now: the delivery ledger, the retry table, the streams table; identify evidence and hypotheses; use an inconclusive conclusion if the cause remains unknown |
-| a signal regressed clearly | the `investigate` skill, then `aoc conclude`; offer the fix-and-rerun loop (`aoc ab --only b` rebuilds b from the tree) |
+| gate failed on b | investigate now: the `investigator` agent on `results/<name>`; it returns the gate counts, the evidence versus the hypotheses and the conclusion text; `inconclusive` when the cause stays unknown |
+| a signal regressed clearly | the `investigator` agent, then `aoc conclude` with its text; the `code-reader` agent when the mover is changed in b and the engineer wants the diff explained; offer the fix-and-rerun loop (`aoc ab --config results/<name>/aoc.yaml --only b` rebuilds b from the tree) |
 | a delta within a point of its threshold | another round: the same line with `--runs 3`; do not investigate noise |
 | clean | the next shape in the plan; after the last one, `aoc conclude --verdict pass` with the numbers and stop |
 | improved | say so with the numbers, and whether the improvement is in the packages under test or elsewhere (a `-full` image, another process) |
@@ -120,10 +135,10 @@ Every session ends with a conclusion on the run that decided it:
 ```
 
 Use the saved config with `--compare-only` to refresh the local brief. For a
-shared notebook, follow [docs/notebooks.md](../../../docs/notebooks.md): write a
-concise analysis from evidence, select indexed charts, publish/update through
-MCP, and record the returned URL. If MCP is unavailable, finish locally and say
-the notebook is unpublished. Publication calls are separate from investigation.
+shared notebook, hand `results/<name>` and the conclusion to the
+`notebook-author` agent; it follows [docs/notebooks.md](../../../docs/notebooks.md)
+and records the returned URL. If MCP is unavailable it says the notebook is
+unpublished; finish locally. Publication calls are separate from investigation.
 
 Then two or three sentences to the engineer: the answer to the goal, the
 runs that showed it (their `results/` paths and the notebook), and the
