@@ -196,7 +196,7 @@ func (s *Stream) emitNormal() int {
 		s.msg = append(s.msg, s.name...)
 		s.msg = append(s.msg, ": "...)
 		s.msg = append(s.msg, exc.msg...)
-		s.tr = appendStackTrace(s.tr[:0], s.name, rng)
+		s.tr = appendStackTrace(s.tr[:0], s.name, rng, s.cfg.MultilineFrames)
 		s.emit(&record{level: Error, msg: s.msg, trace: s.tr, exc: exc})
 		n++
 	}

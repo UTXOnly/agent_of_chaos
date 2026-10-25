@@ -468,6 +468,12 @@ func (c *Conductor) stopped() bool {
 
 func (c *Conductor) executePhase(p *Phase, speed float64) {
 	duration := time.Duration(float64(p.Duration.D()) / speed)
+	if j := time.Duration(float64(p.Jitter.D()) / speed); j > 0 && duration > 0 {
+		duration += rand.N(2*j) - j
+		if duration < time.Second {
+			duration = time.Second
+		}
+	}
 	trans := time.Duration(float64(p.TransitionSec.D()) / speed)
 	c.setPhase(p.Name)
 

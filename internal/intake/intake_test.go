@@ -447,3 +447,44 @@ func TestParseTop(t *testing.T) {
 		t.Error("missing columns should error")
 	}
 }
+
+func TestFlappingFaults(t *testing.T) {
+	if (Faults{FlapOnMs: 10}).Validate() == nil {
+		t.Error("flap_on_ms without flap_off_ms accepted")
+	}
+	if (Faults{FlapOnMs: 10, FlapOffMs: 10}).Validate() == nil {
+		t.Error("flapping with nothing to flap accepted")
+	}
+	f := Faults{ErrorRate: 1, ErrorStatus: 503, FlapOnMs: 20, FlapOffMs: 20, Note: "blips"}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.String(); !strings.Contains(s, "flapping") || !strings.Contains(s, "HTTP 503") {
+		t.Errorf("String() = %q", s)
+	}
+	st := &faultState{}
+	st.set(f)
+	if got := st.configured(); got != f {
+		t.Errorf("configured() = %+v", got)
+	}
+	var on, off int
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if st.get().Active() {
+			on++
+		} else {
+			off++
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if on == 0 || off == 0 {
+		t.Fatalf("flapping never alternated: on=%d off=%d", on, off)
+	}
+	if ratio := float64(on) / float64(on+off); ratio < 0.2 || ratio > 0.8 {
+		t.Errorf("duty cycle %.2f, want about 0.5", ratio)
+	}
+	st.set(Faults{LatencyMs: 5})
+	if !st.get().Active() {
+		t.Error("a steady fault must always apply")
+	}
+}

@@ -512,7 +512,7 @@ func checkFaults(set map[string]any) error {
 	dec.DisallowUnknownFields()
 	var f intake.Faults
 	if err := dec.Decode(&f); err != nil {
-		return fmt.Errorf("%v (fields: latency_ms, jitter_ms, error_rate, error_status, drop_rate, outage, read_bps, note)", err)
+		return fmt.Errorf("%v (fields: latency_ms, jitter_ms, error_rate, error_status, drop_rate, outage, read_bps, flap_on_ms, flap_off_ms, note)", err)
 	}
 	return f.Validate()
 }
@@ -545,6 +545,53 @@ func (p *Profile) faultsSummary() string {
 		}
 	}
 	return fmt.Sprintf("%d steps: %s", len(p.Faults), strings.Join(parts, ", "))
+}
+
+// faultsBeyondWindow lists the fault steps that fall at or after the end of
+// the measured window: they never run, which matters when --duration cut a
+// timeline short (a 2 min look at intake-outage never reaches its 429 phase).
+func (p *Profile) faultsBeyondWindow() []string {
+	var out []string
+	for _, st := range p.Faults {
+		if st.At < p.Duration || st.Clear { // the run clears faults at the window's end anyway
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s at %s", describeFaults(st.Set), st.At))
+	}
+	return out
+}
+
+// lastFaultStep is the offset just past the last `set` step of the timeline,
+// the shortest window that applies every fault.
+func (p *Profile) lastFaultStep() gen.Duration {
+	var last gen.Duration
+	for _, st := range p.Faults {
+		if !st.Clear && st.At >= last {
+			last = st.At + gen.Duration(time.Second)
+		}
+	}
+	return last
+}
+
+// runOverhead is what compose up, the agent's health check, profile
+// collection and the report add to one run, on a warm host with images
+// present. A rough figure for planning, not a measurement.
+const runOverhead = 90 * time.Second
+
+// wallTime estimates one run end to end: warmup, window, drain and overhead.
+func (p *Profile) wallTime() time.Duration {
+	return p.Warmup.D() + p.Duration.D() + p.Drain.D() + runOverhead
+}
+
+// planWarnings are the things worth saying before a run starts: fault steps
+// the window will not reach.
+func (p *Profile) planWarnings() []string {
+	var w []string
+	if beyond := p.faultsBeyondWindow(); len(beyond) > 0 {
+		w = append(w, fmt.Sprintf("the %s window ends before %s; --duration %s or longer runs the whole timeline",
+			p.Duration, strings.Join(beyond, ", "), p.lastFaultStep()))
+	}
+	return w
 }
 
 // profilePath resolves a workload name to profiles/<name>.yaml; a path

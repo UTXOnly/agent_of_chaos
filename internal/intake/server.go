@@ -250,7 +250,7 @@ func (s *Server) banner(addr string, tcpLn net.Listener) {
 	} else {
 		fmt.Fprintf(s.out, "  datadog     off (set DD_API_KEY to submit %s.* metrics)\n", "aoc")
 	}
-	if f := s.faults.get(); f.Active() {
+	if f := s.faults.configured(); f.Active() {
 		fmt.Fprintf(s.out, "  faults      %s\n", f)
 	}
 	fmt.Fprintln(s.out)
@@ -551,7 +551,7 @@ func (s *Server) status() *Status {
 		WindowSeconds: rep.Seconds, Inflight: st.inflight.Load(),
 		Missing: rep.Delivery.Missing, Unique: rep.Delivery.Unique, Generated: rep.Delivery.GeneratedRecords,
 	}
-	out.Faults = s.faults.get()
+	out.Faults = s.faults.configured()
 	out.FaultsActive = out.Faults.Active()
 	if s.agent != nil {
 		out.Observer = s.agent.status()
@@ -625,7 +625,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setFaults(f Faults, desc string) {
-	prev := s.faults.get()
+	prev := s.faults.configured()
 	s.faults.set(f)
 	if !f.Active() && !prev.Active() {
 		return // clearing nothing is not an event
@@ -646,7 +646,7 @@ func (s *Server) setFaults(f Faults, desc string) {
 }
 
 func (s *Server) handleFaultsGet(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.faults.get())
+	writeJSON(w, 200, s.faults.configured())
 }
 
 func (s *Server) handleFaultsSet(w http.ResponseWriter, r *http.Request) {

@@ -137,6 +137,7 @@ func ParseDuration(s string) (time.Duration, error) {
 type Phase struct {
 	Name          string    `yaml:"name" json:"name"`
 	Duration      Duration  `yaml:"duration" json:"duration"`
+	Jitter        Duration  `yaml:"jitter,omitempty" json:"jitter,omitempty"` // ± random variation of Duration, each time the phase runs
 	Streams       *int      `yaml:"streams,omitempty" json:"streams,omitempty"`
 	Rate          *float64  `yaml:"rate,omitempty" json:"rate,omitempty"` // aggregate lines/s (0 = unlimited)
 	BurstSize     *int      `yaml:"burst_size,omitempty" json:"burst_size,omitempty"`
@@ -295,7 +296,7 @@ func rampScenario(c *Config) *Scenario {
 // SpikeStreams streams and SpikeRate lines/s for SpikeDuration.
 func spikeScenario(c *Config) *Scenario {
 	return &Scenario{Name: "spike", Loop: true, Phases: []Phase{
-		{Name: "spike-baseline", Duration: Duration(c.SpikeInterval), Streams: iptr(c.Streams), Rate: fptr(c.Rate)},
+		{Name: "spike-baseline", Duration: Duration(c.SpikeInterval), Jitter: Duration(c.SpikeJitter), Streams: iptr(c.Streams), Rate: fptr(c.Rate)},
 		{Name: "spike-active", Duration: Duration(c.SpikeDuration), Streams: iptr(c.Streams + c.SpikeStreams), Rate: fptr(c.Rate + c.SpikeRate)},
 	}}
 }

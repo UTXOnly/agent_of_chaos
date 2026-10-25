@@ -302,21 +302,29 @@ const stackTraceKinds = 3
 // appendStackTrace writes a multi-line stack trace (without a trailing newline
 // on the last line) in one of three flavours. Each physical line is separated
 // by '\n'. Callers embedding this in JSON must escape it.
-func appendStackTrace(buf []byte, service string, rng *rand.Rand) []byte {
+// frames fixes the number of frames; 0 picks a realistic 2–8 at random.
+func appendStackTrace(buf []byte, service string, rng *rand.Rand, frames int) []byte {
 	switch rng.IntN(stackTraceKinds) {
 	case 0:
-		return appendPyTrace(buf, service, rng)
+		return appendPyTrace(buf, service, rng, frames)
 	case 1:
-		return appendJavaTrace(buf, service, rng)
+		return appendJavaTrace(buf, service, rng, frames)
 	default:
-		return appendGoTrace(buf, service, rng)
+		return appendGoTrace(buf, service, rng, frames)
 	}
 }
 
-func appendPyTrace(buf []byte, service string, rng *rand.Rand) []byte {
+func frameCount(rng *rand.Rand, fixed, min, spread int) int {
+	if fixed > 0 {
+		return fixed
+	}
+	return min + rng.IntN(spread)
+}
+
+func appendPyTrace(buf []byte, service string, rng *rand.Rand, fixed int) []byte {
 	exc := pyExceptions[rng.IntN(len(pyExceptions))]
 	buf = append(buf, "Traceback (most recent call last):"...)
-	frames := 2 + rng.IntN(5)
+	frames := frameCount(rng, fixed, 2, 5)
 	for i := 0; i < frames; i++ {
 		buf = append(buf, "\n  File \""...)
 		if i == 0 {
@@ -342,12 +350,12 @@ func appendPyTrace(buf []byte, service string, rng *rand.Rand) []byte {
 	return buf
 }
 
-func appendJavaTrace(buf []byte, service string, rng *rand.Rand) []byte {
+func appendJavaTrace(buf []byte, service string, rng *rand.Rand, fixed int) []byte {
 	exc := javaExceptions[rng.IntN(len(javaExceptions))]
 	buf = append(buf, exc.kind...)
 	buf = append(buf, ": "...)
 	buf = append(buf, exc.msg...)
-	frames := 3 + rng.IntN(6)
+	frames := frameCount(rng, fixed, 3, 6)
 	for i := 0; i < frames; i++ {
 		cls := javaClasses[rng.IntN(len(javaClasses))]
 		buf = append(buf, "\n\tat com.datadoghq."...)
@@ -381,13 +389,13 @@ func appendJavaTrace(buf []byte, service string, rng *rand.Rand) []byte {
 	return buf
 }
 
-func appendGoTrace(buf []byte, service string, rng *rand.Rand) []byte {
+func appendGoTrace(buf []byte, service string, rng *rand.Rand, fixed int) []byte {
 	buf = append(buf, "panic: "...)
 	buf = append(buf, goPanics[rng.IntN(len(goPanics))]...)
 	buf = append(buf, "\n\ngoroutine "...)
 	buf = strconv.AppendInt(buf, int64(1+rng.IntN(500)), 10)
 	buf = append(buf, " [running]:"...)
-	frames := 2 + rng.IntN(5)
+	frames := frameCount(rng, fixed, 2, 5)
 	for i := 0; i < frames; i++ {
 		buf = append(buf, "\nmain."...)
 		buf = append(buf, goFuncs[rng.IntN(len(goFuncs))]...)

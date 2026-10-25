@@ -59,10 +59,11 @@ type Config struct {
 	BurstSize     int
 	BurstInterval time.Duration
 
-	MultilineRate float64
-	WideLineRate  float64
-	WideLineBytes int
-	PadTo         int
+	MultilineRate   float64
+	MultilineFrames int // frames per stack trace; 0 = a realistic 2–8 at random
+	WideLineRate    float64
+	WideLineBytes   int
+	PadTo           int
 
 	Deterministic bool
 	Seed          uint64
@@ -83,6 +84,7 @@ type Config struct {
 	ChaosRestartDelay time.Duration
 
 	SpikeInterval time.Duration
+	SpikeJitter   time.Duration // ± random variation of the time between spikes
 	SpikeDuration time.Duration
 	SpikeStreams  int
 	SpikeRate     float64
@@ -204,6 +206,12 @@ func (c *Config) Validate() error {
 	}
 	if c.MultilineRate < 0 || c.MultilineRate > 1 || c.WideLineRate < 0 || c.WideLineRate > 1 {
 		return fmt.Errorf("rates must be within [0, 1]")
+	}
+	if c.MultilineFrames < 0 {
+		return fmt.Errorf("--multiline-frames must be >= 0")
+	}
+	if c.SpikeJitter < 0 || (c.SpikeJitter > 0 && c.SpikeJitter >= c.SpikeInterval) {
+		return fmt.Errorf("--spike-jitter must be >= 0 and less than --spike-interval")
 	}
 	if c.WideLineBytes < 16 {
 		return fmt.Errorf("--wide-line-bytes must be >= 16")

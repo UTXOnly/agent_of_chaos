@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/UTXOnly/agent_of_chaos/internal/fmtutil"
+
 	"gopkg.in/yaml.v3"
 
 	"github.com/UTXOnly/agent_of_chaos/internal/ddapi"
@@ -509,8 +511,12 @@ func runRun(args []string) int {
 
 	ctx, cancel := signalContext()
 	defer cancel()
-	fmt.Fprintf(os.Stderr, "\naoc run  %s  profile=%s  agent=%s  window=%s  warmup=%s  drain=%s\n  %s\n  generators: %s\n  faults: %s\n\n",
-		*name, profilePath, orDefault(img, "compose default"), p.Duration, p.Warmup, p.Drain, p.Description, p.summary(), p.faultsSummary())
+	fmt.Fprintf(os.Stderr, "\naoc run  %s  profile=%s  agent=%s  window=%s  warmup=%s  drain=%s\n  %s\n  generators: %s\n  faults: %s\n  wall time: about %s\n",
+		*name, profilePath, orDefault(img, "compose default"), p.Duration, p.Warmup, p.Drain, p.Description, p.summary(), p.faultsSummary(), fmtutil.Duration(p.wallTime().Round(time.Minute)))
+	for _, w := range p.planWarnings() {
+		fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
+	}
+	fmt.Fprintln(os.Stderr)
 	if *plan {
 		out, _ := yaml.Marshal(p)
 		fmt.Printf("# the workload as it would run\n%s\n# containers: %s\n", out, strings.Join(p.serviceNames(), ", "))

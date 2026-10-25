@@ -60,6 +60,7 @@ backend's complete behavior.
 | `error_rate`, `error_status` | answer that status instead of 202 (default 500) | 429/5xx: retry with backoff; other 4xx: drop the batch |
 | `outage` | drop every request | the pipeline backs up and retries until it clears |
 | `read_bps` | read request bodies at this many bytes/s | a saturated uplink |
+| `flap_on_ms`, `flap_off_ms` | apply the faults above in episodes of about `flap_on_ms`, with gaps of about `flap_off_ms`, each drawn in [0.5, 1.5) × the value | blips at random times: retries, duplicates and latency spikes that come and go; episodes are not logged as events |
 | `note` | free text shown in events and the report | |
 
 Three ways to set them:
@@ -99,9 +100,11 @@ aoc generate --deterministic --seed 42 --max-lines 1000000 --rate 0    # identic
 
 - `--rate` is total lines/s across streams; `0` means as fast as possible.
   Pacing counts every record, stack traces and oversized lines included.
-- Content: `--multiline-rate` (stack traces), `--wide-line-rate` and
-  `--wide-line-bytes` (oversized lines), `--pad-to`, `--burst-size` and
-  `--burst-interval`.
+- Content: `--multiline-rate` and `--multiline-frames` (stack traces and
+  their size), `--wide-line-rate` and `--wide-line-bytes` (oversized lines),
+  `--pad-to`, `--burst-size` and `--burst-interval`.
+- Spurts at random times: `--mode spike` with `--spike-jitter` (± on the
+  time between spikes).
 - Rotation by rename (new inode) or truncate (copytruncate, same inode).
 - Modes: `steady`, `ramp`, `chaos`, `spike`, `pulse`, `scenario` (built-in
   `wave`, `business-day`, `incident`, `longhaul`, or your own YAML:

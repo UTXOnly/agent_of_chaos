@@ -1,0 +1,8 @@
+name: bursty
+description: Random spurts of logs on a quiet background. 8 plain streams at 3,000 lines/s; every 20±15 s, 8 more streams appear and the rate jumps by 40,000 lines/s for 5 s. The JSON half adds 2,000-line bursts per stream every 7 s. Watch end-to-end latency p99 and max, saturation during a spurt, and whether anything is lost when the tailer and sender catch up.
+duration: 4m
+warmup: 20s
+drain: 60s
+generators:
+  plain: { mode: spike, streams: 8, rate: 3000, spike-interval: 20s, spike-jitter: 15s, spike-duration: 5s, spike-streams: 8, spike-rate: 40000 }
+  json:  { format: json, streams: 8, rate: 3000, burst-size: 2000, burst-interval: 7s }

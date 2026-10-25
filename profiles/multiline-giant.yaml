@@ -1,0 +1,11 @@
+name: multiline-giant
+description: Very large multi-line records. 10% of records on 8 streams carry 300-frame stack traces (20–30 KiB each); 2 slow streams emit 3000-frame traces (200–300 KiB) that cross the agent's single-message limit. Watch truncated and orphan continuation lines, "multiline received / written", and memory held while aggregating. Flip DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION.
+duration: 3m
+warmup: 20s
+drain: 60s
+agent:
+  env:
+    DD_LOGS_CONFIG_AUTO_MULTI_LINE_DETECTION: "false"
+generators:
+  plain: { streams: 8, rate: 2000, multiline-rate: 0.1, multiline-frames: 300 }
+  huge:  { streams: 2, rate: 20, multiline-rate: 0.5, multiline-frames: 3000, rotate-bytes: 8MiB }

@@ -1,0 +1,11 @@
+name: intermittent-network
+description: Network blips, not a steady degradation. For the whole window the intake flaps between episodes of about 5 s where 30% of requests get no response and the rest are delayed 800±400 ms, separated by quiet gaps of about 20 s, both randomized ±50%. Watch duplicates and retries by status first, then end-to-end latency max and recovery after each blip.
+duration: 4m
+warmup: 20s
+drain: 90s
+generators:
+  plain: { streams: 8, rate: 5000 }
+  json:  { format: json, streams: 8, rate: 5000 }
+faults:
+  - at: 0s
+    set: { drop_rate: 0.3, latency_ms: 800, jitter_ms: 400, flap_on_ms: 5000, flap_off_ms: 20000, note: "network blips" }
