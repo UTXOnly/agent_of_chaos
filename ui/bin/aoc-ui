@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# aoc-ui: start, stop and inspect the aoc web UI (one Node process), and
+# launch aoc runs through it so they show up live in the browser.
+#
+#   ui/bin/aoc-ui start [--dev]   build if needed, start in the background, print the URL
+#   ui/bin/aoc-ui stop            interrupt the active run (aoc takes its stack down), exit
+#   ui/bin/aoc-ui status          pid, port, the active run and its phase
+#   ui/bin/aoc-ui run -- ARGS…    run `aoc ARGS…` through the UI: starts the server if
+#                                 needed, prints the live URL, waits, exits with aoc's code
+#   ui/bin/aoc-ui stop-run        stop the active run (SIGINT; aoc takes its stack down)
+#   ui/bin/aoc-ui logs [-f]       the server's log
+#   ui/bin/aoc-ui clean           stop, then remove ui/.state (run history, logs)
+#
+# AOC_UI_PORT (default 4100) picks the port. Exit codes: 0 ok, 1 not running
+# (status), 2 usage; `run` exits with aoc's own code (0 clean, 3 delivery
+# gate failed, 130 interrupted).
+set -euo pipefail
+
+UI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$UI_DIR/.." && pwd)"
+STATE="$UI_DIR/.state"
+PIDFILE="$STATE/aoc-ui.pid"
+LOG="$STATE/aoc-ui.log"
+PORT="${AOC_UI_PORT:-4100}"
+URL="http://localhost:$PORT"
+
+pid() { [ -f "$PIDFILE" ] && cat "$PIDFILE" 2>/dev/null || true; }
+alive() { local p; p="$(pid)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+up() { curl -fsS -m 3 "$URL/api/health" >/dev/null 2>&1; }
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "aoc-ui: $1 is required" >&2; exit 2; }; }
+
+# JSON field of the document on stdin, by dotted path; empty when absent.
+jfield() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let v=JSON.parse(s);for(const k of process.argv[1].split("."))v=v?.[k];if(v!==undefined&&v!==null)process.stdout.write(String(v))})' "$1"; }
+
+cmd_start() {
+  need node; need pnpm
+  if alive; then echo "aoc-ui: already running (pid $(pid)) at $URL"; exit 0; fi
+  mkdir -p "$STATE"
+  [ -x "$ROOT/bin/aoc" ] || (cd "$ROOT" && make build)
+  [ -d "$UI_DIR/node_modules" ] || (cd "$UI_DIR" && pnpm install --silent)
+  if [ "${1:-}" = "--dev" ]; then
+    echo "aoc-ui: dev mode (server :$PORT, vite :5173 with HMR); ctrl-c stops both"
+    cd "$UI_DIR" && exec pnpm dev
+  fi
+  if [ ! -f "$UI_DIR/dist/index.html" ] || [ -n "$(find "$UI_DIR/src" "$UI_DIR/shared" -newer "$UI_DIR/dist/index.html" -type f 2>/dev/null | head -1)" ]; then
+    echo "aoc-ui: building the front end"
+    (cd "$UI_DIR" && pnpm build >"$STATE/build.log" 2>&1) || { echo "aoc-ui: build failed, see $STATE/build.log" >&2; exit 1; }
+  fi
+  cd "$UI_DIR"
+  AOC_UI_PORT="$PORT" nohup node_modules/.bin/tsx server/index.ts >>"$LOG" 2>&1 &
+  echo $! >"$PIDFILE"
+  for _ in $(seq 1 40); do
+    if up; then echo "aoc-ui: $URL (pid $(pid), log $LOG)"; exit 0; fi
+    sleep 0.25
+  done
+  echo "aoc-ui: did not come up; tail of $LOG:" >&2; tail -20 "$LOG" >&2; exit 1
+}
+
+cmd_stop() {
+  if ! alive; then
+    rm -f "$PIDFILE"
+    # a server started by hand (pnpm start) has no pidfile; try the port
+    if curl -fsS -X POST "$URL/api/shutdown" >/dev/null 2>&1; then echo "aoc-ui: asked the server on :$PORT to stop"; else echo "aoc-ui: not running"; fi
+    return 0
+  fi
+  local p; p="$(pid)"
+  local busy; busy="$(curl -fsS "$URL/api/health" 2>/dev/null | jfield busy || true)"
+  [ "$busy" = "true" ] && echo "aoc-ui: a run is active; interrupting it so aoc can take its stack down (up to 2 min)"
+  kill -TERM "$p" 2>/dev/null || true
+  for _ in $(seq 1 600); do kill -0 "$p" 2>/dev/null || { rm -f "$PIDFILE"; echo "aoc-ui: stopped"; return 0; }; sleep 0.25; done
+  echo "aoc-ui: still running after 150 s, killing" >&2
+  kill -KILL "$p" 2>/dev/null || true; rm -f "$PIDFILE"
+}
+
+cmd_status() {
+  if ! up; then echo "aoc-ui: not running"; return 1; fi
+  local h; h="$(curl -fsS "$URL/api/health")"
+  echo "aoc-ui: running, pid $(echo "$h" | jfield pid), $URL"
+  if [ "$(echo "$h" | jfield busy)" = "true" ]; then
+    echo "active run: $(echo "$h" | jfield active.name) ($(echo "$h" | jfield active.kind)) · phase $(echo "$h" | jfield active.phase) since $(echo "$h" | jfield active.phaseSince) · $(echo "$h" | jfield active.resultsDir) · id $(echo "$h" | jfield active.id)"
+  else
+    echo "no run active"
+  fi
+}
+
+# run -- ARGS…: POST {argv} to the server, then long-poll /wait until the
+# run ends, printing each phase change. No sleep loop: every poll is one
+# HTTP request the server answers when something changes or after 60 s.
+cmd_run() {
+  need node; need curl
+  [ "${1:-}" = "--" ] && shift
+  [ $# -gt 0 ] || { echo "aoc-ui run -- ab|run FLAGS…" >&2; exit 2; }
+  if ! up; then
+    if alive; then echo "aoc-ui: server pid $(pid) is not answering on $URL" >&2; exit 1; fi
+    cmd_start >/dev/null || { echo "aoc-ui: could not start the server" >&2; exit 1; }
+  fi
+  local body resp code rec id name
+  body="$(node -e 'process.stdout.write(JSON.stringify({argv: process.argv.slice(1)}))' -- "$@")"
+  resp="$(curl -sS -m 30 -w $'\n%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "$body" "$URL/api/runs")"
+  code="${resp##*$'\n'}"; rec="${resp%$'\n'*}"
+  if [ "$code" != "201" ]; then echo "aoc-ui: launch refused ($code): $(echo "$rec" | jfield error || echo "$rec")" >&2; exit 1; fi
+  id="$(echo "$rec" | jfield id)"; name="$(echo "$rec" | jfield request.name)"
+  echo "aoc-ui: queued $name as run $id · watch at $URL/#live · results/$name"
+  echo "aoc-ui: $ $(echo "$rec" | jfield command)"
+  trap 'echo "aoc-ui: interrupted, stopping run $id"; curl -fsS -m 5 -X POST "$URL/api/runs/$id/stop" >/dev/null 2>&1 || true' INT TERM
+  local phase="queued" r p
+  while :; do
+    r="$(curl -sS -m 130 "$URL/api/runs/$id/wait?phase=$phase&timeout=60" 2>/dev/null)" || { sleep 2; continue; }
+    p="$(echo "$r" | jfield phase)"
+    [ -n "$p" ] || { sleep 2; continue; }
+    if [ "$p" != "$phase" ]; then echo "$(date +%H:%M:%S) aoc-ui: $p"; phase="$p"; fi
+    [ "$(echo "$r" | jfield "done")" = "true" ] && break
+  done
+  trap - INT TERM
+  local exit_code; exit_code="$(echo "$r" | jfield exitCode)"
+  echo "aoc-ui: $phase, exit ${exit_code:-?} · results/$name · log $(echo "$r" | jfield logPath)"
+  echo "--- last lines of the run's log"
+  curl -sS -m 10 "$URL/api/runs/$id/log" | grep -v '^aoc-ui:' | tail -15
+  case "$phase" in
+    finished) exit "${exit_code:-0}" ;;
+    interrupted) exit 130 ;;
+    *) exit "${exit_code:-1}" ;;
+  esac
+}
+
+cmd_stop_run() {
+  up || { echo "aoc-ui: not running"; return 1; }
+  local id; id="$(curl -fsS "$URL/api/health" | jfield active.id)"
+  [ -n "$id" ] || { echo "aoc-ui: no run active"; return 0; }
+  curl -fsS -X POST "$URL/api/runs/$id/stop" >/dev/null && echo "aoc-ui: SIGINT sent to run $id; aoc is taking its stack down"
+  for _ in $(seq 1 60); do
+    [ "$(curl -fsS "$URL/api/runs/$id/wait?timeout=5" | jfield "done")" = "true" ] && { echo "aoc-ui: run $id stopped"; return 0; }
+  done
+  echo "aoc-ui: still stopping after 5 min; ui/bin/aoc-ui status" >&2; return 1
+}
+
+cmd_logs() { [ -f "$LOG" ] || { echo "aoc-ui: no log yet"; exit 1; }; if [ "${1:-}" = "-f" ]; then tail -f "$LOG"; else tail -100 "$LOG"; fi; }
+
+cmd_clean() { cmd_stop; rm -rf "$STATE"; echo "aoc-ui: removed $STATE"; }
+
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  stop) cmd_stop ;;
+  restart) cmd_stop; cmd_start ;;
+  status) cmd_status ;;
+  run) shift; cmd_run "$@" ;;
+  stop-run) cmd_stop_run ;;
+  logs) shift; cmd_logs "$@" ;;
+  clean) cmd_clean ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
